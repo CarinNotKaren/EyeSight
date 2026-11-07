@@ -13,3 +13,4 @@ torch==2.15.0+cpu
 paddlepaddle==3.3.1
 paddleocr==3.7.0
 paddlex==3.7.2
+ultralytics==8.4.204 #small pretrained YOLO26n model to detect objects in the video frames
