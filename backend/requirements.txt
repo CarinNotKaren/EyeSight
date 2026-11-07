@@ -14,3 +14,8 @@ paddlepaddle==3.3.1
 paddleocr==3.7.0
 paddlex==3.7.2
 ultralytics==8.4.204 #small pretrained YOLO26n model to detect objects in the video frames
+                     #It is pretrained, so we don’t train it ourselves.
+                     #The n means nano, the smallest size in that model family.
+                      #A small model is a practical starting point for running on your laptop’s CPU.
+                     #It detects useful categories such as person and couch. We still need broader accuracy and speed testing.
+open_clip_torch==4.2.1 #for semantic search of video frames, to find frames that are visually similar to a given frame. 
