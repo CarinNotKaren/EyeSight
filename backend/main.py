@@ -5,12 +5,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.connection import engine
 from database.dependencies import get_db
+# Import the question endpoints.
+from routers.questions import router as questions_router
 
 app = FastAPI(
     title="EyeSight API",
     description="Backend API for the EyeSight visual assistant.",
     version="1.0.0"
 )
+
 
 
 @app.get("/")
@@ -53,3 +56,6 @@ def check_database_session(db: Session = Depends(get_db)):
             "status": "error",
             "message": "Database query failed"
         }
+
+# Register the question endpoints with the main FastAPI application.
+app.include_router(questions_router)

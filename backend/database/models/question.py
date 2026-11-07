@@ -70,3 +70,5 @@ class Question(Base):
         ),
         Index("idx_question_history", "session_id", "received_at"),
     )
+
+
