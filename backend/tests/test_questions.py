@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from database.models.answer import Answer
+from database.models.answer_evidence import AnswerEvidence
 from database.models.question import Question
 from database.models.session import Session as DBSession
 from routers import questions as question_router
@@ -378,3 +379,46 @@ def test_process_text_question_runs_retrieval_and_answering(monkeypatch):
     assert result.status == "completed"
     assert result.retrieval_configuration["count"] == 1
     assert db.commit_count == 2
+
+
+
+def test_get_question_answer_evidence_returns_ordered_references():
+    # Evidence is exposed only after its parent question and answer exist.
+    question = SimpleNamespace(question_id=31)
+    answer = SimpleNamespace(answer_id=81, question_id=31)
+    evidence = [
+        SimpleNamespace(
+            answer_id=81,
+            frame_id=41,
+            retrieval_rank=1,
+            retrieval_method="semantic",
+            semantic_score=0.87,
+            combined_score=0.87,
+            provided_to_model=True,
+        )
+    ]
+    db = FakeDB({
+        Question: {"first": question},
+        Answer: {"first": answer},
+        AnswerEvidence: {"all": evidence},
+    })
+
+    result = question_router.get_question_answer_evidence(31, db)
+
+    assert result == evidence
+    assert result[0].frame_id == 41
+    assert result[0].provided_to_model is True
+
+
+def test_get_question_answer_evidence_returns_404_before_answer_exists():
+    # Evidence cannot be returned until an answer has been persisted.
+    question = SimpleNamespace(question_id=31)
+    db = FakeDB({
+        Question: {"first": question},
+        Answer: {"first": None},
+    })
+
+    with pytest.raises(HTTPException) as error:
+        question_router.get_question_answer_evidence(31, db)
+
+    assert error.value.status_code == 404
