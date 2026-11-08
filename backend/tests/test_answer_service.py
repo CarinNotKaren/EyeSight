@@ -12,7 +12,12 @@ from database.models.answer_evidence import AnswerEvidence
 class FakeQuery:
     """Small fake supporting the Answer lookup used by the service."""
 
+    def filter(self, *conditions):
+        # Accept SQLAlchemy filter expressions and keep the fake query chainable.
+        return self
+
     def first(self):
+        # Simulate a database lookup where no previous answer exists.
         return None
 
 
