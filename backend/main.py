@@ -1,3 +1,4 @@
+from routers.auth import router as auth_router
 from fastapi import FastAPI, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ app = FastAPI(
     description="Backend API for the EyeSight visual assistant.",
     version="1.0.0"
 )
-
+app.include_router(auth_router)
 
 
 @app.get("/")

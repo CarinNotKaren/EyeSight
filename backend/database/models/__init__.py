@@ -14,3 +14,4 @@ from database.models.answer_evidence import AnswerEvidence
 from database.models.feedback import Feedback
 from database.models.evaluation import Evaluation
 from database.models.alert import Alert
+from database.models.refresh_token import RefreshToken
