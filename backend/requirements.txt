@@ -21,4 +21,5 @@ ultralytics==8.4.204 #small pretrained YOLO26n model to detect objects in the vi
                      #The n means nano, the smallest size in that model family.
                       #A small model is a practical starting point for running on your laptop’s CPU.
                      #It detects useful categories such as person and couch. We still need broader accuracy and speed testing.
-open_clip_torch==4.2.1 #for semantic search of video frames, to find frames that are visually similar to a given frame. 
+open_clip_torch==4.2.1 #for semantic search of video frames, to find frames that are visually similar to a given frame.
+huggingface_hub>=0.34.0 #for Hugging Face hosted vision-language inference

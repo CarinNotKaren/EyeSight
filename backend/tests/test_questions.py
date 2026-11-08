@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from database.models.answer import Answer
+from database.models.answer_evidence import AnswerEvidence
 from database.models.question import Question
 from database.models.session import Session as DBSession
 from routers import questions as question_router
@@ -266,11 +267,21 @@ def test_transcription_saves_text_and_starts_retrieval(monkeypatch):
         "frames": [{"frame_id": 41, "image_storage_key": "frame-41.jpg"}],
     }
 
-    # Mock the expensive retrieval step while exercising the route workflow.
+    # Mock retrieval and VLM persistence while exercising the route workflow.
     monkeypatch.setattr(
         question_router,
         "retrieve_question_evidence",
         lambda current_question: retrieved_evidence,
+    )
+
+    def save_fake_answer(current_db, current_question):
+        # The mocked answer service completes the question after persistence.
+        current_question.status = "completed"
+
+    monkeypatch.setattr(
+        question_router,
+        "generate_and_persist_answer",
+        save_fake_answer,
     )
 
     transcription = SimpleNamespace(
@@ -282,8 +293,9 @@ def test_transcription_saves_text_and_starts_retrieval(monkeypatch):
     # Verify the transcription and retrieved evidence were persisted.
     assert result.question_text == "What is in front of me?"
     assert result.language_code == "en"
-    assert result.retrieval_configuration == retrieved_evidence
-    assert result.status == "answering"
+    assert result.retrieval_configuration["count"] == retrieved_evidence["count"]
+    assert result.retrieval_configuration["retrieval_latency_ms"] >= 0
+    assert result.status == "completed"
     assert result.error_code is None
     assert db.commit_count == 2
 
@@ -325,3 +337,89 @@ def test_transcription_marks_question_failed_when_retrieval_fails(monkeypatch):
     assert question.status == "failed"
     assert question.error_code == "visual_retrieval_failed"
     assert db.rollback_count == 1
+
+
+def test_process_text_question_runs_retrieval_and_answering(monkeypatch):
+    # A text question starts in received state and enters the shared pipeline.
+    question = SimpleNamespace(
+        question_id=45,
+        session_id=7,
+        input_type="text",
+        question_text="What is in front of me?",
+        language_code="en",
+        status="received",
+        retrieval_configuration=None,
+        error_code=None,
+    )
+    db = FakeDB({Question: {"first": question}})
+    retrieved_evidence = {
+        "retrieval_version": "member2-frame-retrieval-v1",
+        "count": 1,
+        "frames": [{"frame_id": 41, "image_storage_key": "frame-41.jpg"}],
+    }
+
+    # Mock the model pipeline so this route test does not call external services.
+    monkeypatch.setattr(
+        question_router,
+        "retrieve_question_evidence",
+        lambda current_question: retrieved_evidence,
+    )
+
+    def save_fake_answer(current_db, current_question):
+        current_question.status = "completed"
+
+    monkeypatch.setattr(
+        question_router,
+        "generate_and_persist_answer",
+        save_fake_answer,
+    )
+
+    result = question_router.process_text_question(45, db)
+
+    assert result is question
+    assert result.status == "completed"
+    assert result.retrieval_configuration["count"] == 1
+    assert db.commit_count == 2
+
+
+
+def test_get_question_answer_evidence_returns_ordered_references():
+    # Evidence is exposed only after its parent question and answer exist.
+    question = SimpleNamespace(question_id=31)
+    answer = SimpleNamespace(answer_id=81, question_id=31)
+    evidence = [
+        SimpleNamespace(
+            answer_id=81,
+            frame_id=41,
+            retrieval_rank=1,
+            retrieval_method="semantic",
+            semantic_score=0.87,
+            combined_score=0.87,
+            provided_to_model=True,
+        )
+    ]
+    db = FakeDB({
+        Question: {"first": question},
+        Answer: {"first": answer},
+        AnswerEvidence: {"all": evidence},
+    })
+
+    result = question_router.get_question_answer_evidence(31, db)
+
+    assert result == evidence
+    assert result[0].frame_id == 41
+    assert result[0].provided_to_model is True
+
+
+def test_get_question_answer_evidence_returns_404_before_answer_exists():
+    # Evidence cannot be returned until an answer has been persisted.
+    question = SimpleNamespace(question_id=31)
+    db = FakeDB({
+        Question: {"first": question},
+        Answer: {"first": None},
+    })
+
+    with pytest.raises(HTTPException) as error:
+        question_router.get_question_answer_evidence(31, db)
+
+    assert error.value.status_code == 404
