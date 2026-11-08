@@ -5,6 +5,7 @@ It does not duplicate embedding, OCR, object-detection, or ranking logic.
 """
 
 from datetime import datetime, timezone
+from time import perf_counter
 
 
 DEFAULT_TOP_K = 3
@@ -20,6 +21,7 @@ def search_frames(**kwargs):
 
 def retrieve_question_evidence(question):
     """Retrieve and serialize visual evidence for one persisted question."""
+    started = perf_counter()
 
     # Member 2's function accepts naive UTC datetimes, matching our DB models.
     results = search_frames(
@@ -35,6 +37,7 @@ def retrieve_question_evidence(question):
     return {
         "retrieval_version": "member2-frame-retrieval-v1",
         "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+        "retrieval_latency_ms": round((perf_counter() - started) * 1000),
         "query": question.question_text,
         "top_k": DEFAULT_TOP_K,
         "count": len(results),
