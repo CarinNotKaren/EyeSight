@@ -266,11 +266,21 @@ def test_transcription_saves_text_and_starts_retrieval(monkeypatch):
         "frames": [{"frame_id": 41, "image_storage_key": "frame-41.jpg"}],
     }
 
-    # Mock the expensive retrieval step while exercising the route workflow.
+    # Mock retrieval and VLM persistence while exercising the route workflow.
     monkeypatch.setattr(
         question_router,
         "retrieve_question_evidence",
         lambda current_question: retrieved_evidence,
+    )
+
+    def save_fake_answer(current_db, current_question):
+        # The mocked answer service completes the question after persistence.
+        current_question.status = "completed"
+
+    monkeypatch.setattr(
+        question_router,
+        "generate_and_persist_answer",
+        save_fake_answer,
     )
 
     transcription = SimpleNamespace(
@@ -283,7 +293,7 @@ def test_transcription_saves_text_and_starts_retrieval(monkeypatch):
     assert result.question_text == "What is in front of me?"
     assert result.language_code == "en"
     assert result.retrieval_configuration == retrieved_evidence
-    assert result.status == "answering"
+    assert result.status == "completed"
     assert result.error_code is None
     assert db.commit_count == 2
 
