@@ -4,14 +4,12 @@ These tests use a lightweight fake SQLAlchemy session so they do not require
 a running MySQL server or Member 2's NumPy/OpenCLIP retrieval dependencies.
 """
 
-from datetime import datetime
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
 
-from assistant import question_service
 from database.models.answer import Answer
 from database.models.question import Question
 from database.models.session import Session as DBSession
