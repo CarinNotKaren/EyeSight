@@ -113,6 +113,8 @@ def test_no_evidence_creates_safe_answer_without_calling_vlm(monkeypatch):
 
 
 def test_grounded_answer_persists_model_and_exact_frame_evidence(monkeypatch):
+    # Simulate configured credentials so the evidence flag is deterministic.
+    monkeypatch.setenv("HF_TOKEN", "test-token")
     db = FakeDB()
     question = make_question()
     images = [{
