@@ -338,7 +338,15 @@ def generate_and_persist_answer(db, question):
             answer_text = _fallback_text(question.language_code)
 
     retrieval_latency_ms = (retrieval or {}).get("retrieval_latency_ms")
-    total_latency_ms = round((perf_counter() - started) * 1000)
+    # Measure end-to-end server time from question receipt when available;
+    # otherwise retain the local answer-stage duration for isolated tests.
+    received_at = getattr(question, "received_at", None)
+    if isinstance(received_at, datetime):
+        total_latency_ms = max(
+            0, round((utc_now() - received_at).total_seconds() * 1000)
+        )
+    else:
+        total_latency_ms = round((perf_counter() - started) * 1000)
 
     answer = Answer(
         question_id=question.question_id,
