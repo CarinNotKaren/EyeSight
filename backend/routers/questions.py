@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from database.dependencies import get_db
 from database.models.question import Question
 from database.models.session import Session as DBSession
+from database.models.answer import Answer
+from assistant.evidence_service import retrieve_question_evidence
 from datetime import datetime, timezone
 
 from fastapi import status
@@ -251,28 +253,37 @@ def update_question_transcription(
         )
 
     try:
-        # Save the text recognized by Whisper.
+        # Save the transcription from Member 1 before starting retrieval.
         question.question_text = transcription.question_text.strip()
-
-        # Save the language detected by Whisper.
         question.language_code = transcription.language_code
-
-        # Move the question to the visual evidence retrieval stage.
         question.status = "retrieving"
-
-        # Save the changes to the database.
         db.commit()
-
-        # Refresh the question with its updated database values.
         db.refresh(question)
 
-        # Return the updated question.
+        # Call Member 2's existing retrieval function through our bridge.
+        retrieval_result = retrieve_question_evidence(question)
+
+        # Persist the exact frame references for the later answering stage.
+        question.retrieval_configuration = retrieval_result
+        question.status = "answering"
+        question.error_code = None
+        db.commit()
+        db.refresh(question)
         return question
 
-    except Exception:
-        # Undo database changes if an error occurs.
+    except Exception as error:
+        # Mark the question failed if retrieval cannot complete.
         db.rollback()
+        failed_question = db.query(Question).filter(
+            Question.question_id == question_id
+        ).first()
+
+        if failed_question is not None:
+            failed_question.status = "failed"
+            failed_question.error_code = "visual_retrieval_failed"
+            db.commit()
+
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save transcription"
-        )
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Visual evidence retrieval failed"
+        ) from error
