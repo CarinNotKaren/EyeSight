@@ -10,9 +10,11 @@ from assistant.evidence_service import retrieve_question_evidence
 from assistant.question_service import update_question_status
 from database.dependencies import get_db
 from database.models.answer import Answer
+from database.models.answer_evidence import AnswerEvidence
 from database.models.question import Question
 from database.models.session import Session as DBSession
 from schemas.question import (
+    AnswerEvidenceResponse,
     AnswerResponse,
     QuestionCreate,
     QuestionResponse,
@@ -194,6 +196,38 @@ def get_question_answer(
         )
 
     return answer
+
+
+@router.get(
+    "/{question_id}/answer/evidence",
+    response_model=list[AnswerEvidenceResponse],
+)
+def get_question_answer_evidence(
+    question_id: int,
+    db: Session = Depends(get_db),
+):
+    """Return the frame references and retrieval scores supporting an answer."""
+    question = db.query(Question).filter(
+        Question.question_id == question_id
+    ).first()
+
+    if question is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    answer = db.query(Answer).filter(
+        Answer.question_id == question_id
+    ).first()
+
+    if answer is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Answer not available yet",
+        )
+
+    # Do not expose local storage paths or raw image bytes through this route.
+    return db.query(AnswerEvidence).filter(
+        AnswerEvidence.answer_id == answer.answer_id
+    ).order_by(AnswerEvidence.retrieval_rank).all()
 
 
 @router.patch("/{question_id}/status")
