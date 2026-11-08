@@ -24,24 +24,25 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-  "expo-router",
-  [
-    "expo-splash-screen",
-    {
-      "backgroundColor": "#208AEF",
-      "image": "./assets/images/splash-icon.png",
-      "imageWidth": 76
-    }
-  ],
-  [
-    "expo-camera",
-    {
-      "cameraPermission": "Allow EyeSight to use your camera to help you understand your surroundings.",
-      "microphonePermission": "Allow EyeSight to use your microphone to ask questions.",
-      "recordAudioAndroid": false
-    }
-  ]
-],
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#208AEF",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow EyeSight to use your camera to help you understand your surroundings.",
+          "microphonePermission": "Allow EyeSight to use your microphone to ask questions.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-secure-store"
+    ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

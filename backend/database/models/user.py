@@ -1,3 +1,4 @@
+
 from sqlalchemy import Column, String, text
 from sqlalchemy.dialects import mysql
 
@@ -14,6 +15,17 @@ class User(Base):
     )
 
     display_name = Column(String(100), nullable=False)
+
+    email = Column(
+        String(255),
+        nullable=False,
+        unique=True
+    )
+
+    password_hash = Column(
+        String(255),
+        nullable=False
+    )
 
     preferred_language = Column(
         String(16),
