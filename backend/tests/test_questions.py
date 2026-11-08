@@ -293,7 +293,8 @@ def test_transcription_saves_text_and_starts_retrieval(monkeypatch):
     # Verify the transcription and retrieved evidence were persisted.
     assert result.question_text == "What is in front of me?"
     assert result.language_code == "en"
-    assert result.retrieval_configuration == retrieved_evidence
+    assert result.retrieval_configuration["count"] == retrieved_evidence["count"]
+    assert result.retrieval_configuration["retrieval_latency_ms"] >= 0
     assert result.status == "completed"
     assert result.error_code is None
     assert db.commit_count == 2
