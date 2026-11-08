@@ -308,9 +308,13 @@ def generate_and_persist_answer(db, question):
     answer_type = "no_evidence"
     uncertainty_reason = "No unexpired retrieved frame images were available."
     answer_text = _fallback_text(question.language_code, no_evidence=True)
+    provided_to_model = False
 
     if images:
         generation_started = perf_counter()
+        # Record that images were included in an inference request only when
+        # credentials exist; missing credentials produce a local fallback.
+        provided_to_model = bool(os.getenv("HF_TOKEN"))
         try:
             generated, model_name = call_vision_model(
                 question.question_text,
@@ -366,7 +370,7 @@ def generate_and_persist_answer(db, question):
                 retrieval_method="semantic" if similarity is not None else "time",
                 semantic_score=similarity,
                 combined_score=similarity,
-                provided_to_model=True,
+                provided_to_model=provided_to_model,
             ))
 
         # A fallback/no-evidence response is still a completed user response.
