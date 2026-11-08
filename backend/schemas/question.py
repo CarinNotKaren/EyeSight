@@ -83,3 +83,16 @@ class TranscriptionUpdate(BaseModel):
 
     # Store the language detected by Whisper.
     language_code: str = Field(min_length=2, max_length=16)
+
+class AnswerEvidenceResponse(BaseModel):
+    """Public, storage-safe reference to a frame used for an answer."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    answer_id: int
+    frame_id: int
+    retrieval_rank: int
+    retrieval_method: str
+    semantic_score: float | None
+    combined_score: float | None
+    provided_to_model: bool
