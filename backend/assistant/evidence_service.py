@@ -6,10 +6,16 @@ It does not duplicate embedding, OCR, object-detection, or ranking logic.
 
 from datetime import datetime, timezone
 
-from multimedia.frame_retrieval import search_frames
-
 
 DEFAULT_TOP_K = 3
+
+
+def search_frames(**kwargs):
+    # Import the AI retrieval pipeline only when real retrieval is requested.
+    # This keeps unit tests independent from NumPy and OpenCLIP installations.
+    from multimedia.frame_retrieval import search_frames as retrieve_frames
+
+    return retrieve_frames(**kwargs)
 
 
 def retrieve_question_evidence(question):
@@ -25,8 +31,7 @@ def retrieve_question_evidence(question):
     )
 
     # SQLAlchemy's MySQL JSON column needs ordinary JSON-compatible values.
-    # search_frames already returns frame IDs, storage keys, timestamps,
-    # and similarity scores; keep these exact references for later answering.
+    # Keep frame IDs and storage keys for the later image-loading/answering stage.
     return {
         "retrieval_version": "member2-frame-retrieval-v1",
         "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
