@@ -335,3 +335,46 @@ def test_transcription_marks_question_failed_when_retrieval_fails(monkeypatch):
     assert question.status == "failed"
     assert question.error_code == "visual_retrieval_failed"
     assert db.rollback_count == 1
+
+
+def test_process_text_question_runs_retrieval_and_answering(monkeypatch):
+    # A text question starts in received state and enters the shared pipeline.
+    question = SimpleNamespace(
+        question_id=45,
+        session_id=7,
+        input_type="text",
+        question_text="What is in front of me?",
+        language_code="en",
+        status="received",
+        retrieval_configuration=None,
+        error_code=None,
+    )
+    db = FakeDB({Question: {"first": question}})
+    retrieved_evidence = {
+        "retrieval_version": "member2-frame-retrieval-v1",
+        "count": 1,
+        "frames": [{"frame_id": 41, "image_storage_key": "frame-41.jpg"}],
+    }
+
+    # Mock the model pipeline so this route test does not call external services.
+    monkeypatch.setattr(
+        question_router,
+        "retrieve_question_evidence",
+        lambda current_question: retrieved_evidence,
+    )
+
+    def save_fake_answer(current_db, current_question):
+        current_question.status = "completed"
+
+    monkeypatch.setattr(
+        question_router,
+        "generate_and_persist_answer",
+        save_fake_answer,
+    )
+
+    result = question_router.process_text_question(45, db)
+
+    assert result is question
+    assert result.status == "completed"
+    assert result.retrieval_configuration["count"] == 1
+    assert db.commit_count == 2
