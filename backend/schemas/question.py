@@ -12,6 +12,10 @@ class QuestionCreate(BaseModel):
     # Unique client-generated ID prevents duplicate question submissions.
     client_request_id: UUID
 
+        # Optional exact frame to use for a question about the current view.
+    # When omitted, the retrieval service searches relevant past frames.
+    frame_id: int | None = Field(default=None, gt=0)
+
     # A question can be submitted as typed text or recorded voice.
     input_type: Literal["voice", "text"]
 

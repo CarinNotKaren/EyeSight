@@ -21,6 +21,8 @@ from schemas.question import (
     TranscriptionUpdate,
 )
 
+from database.models.frame import Frame
+
 router = APIRouter(
     prefix="/api/questions",
     tags=["Questions"],
@@ -116,6 +118,29 @@ def create_question(
     if existing_question:
         return existing_question
 
+        # If the client specifies a current frame, verify that it is usable
+    # and belongs to this active session.
+    if question_data.frame_id is not None:
+        requested_frame = db.query(Frame).filter(
+            Frame.frame_id == question_data.frame_id,
+            Frame.session_id == question_data.session_id,
+        ).first()
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        # Reject missing frames, frames that are still processing, and
+        # frames whose retention period or session history has expired.
+        if (
+            requested_frame is None
+            or requested_frame.processing_status not in ("ready", "partial")
+            or requested_frame.expires_at <= now
+            or db_session.history_expires_at <= now
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Usable frame not found in this session",
+            )
+
     new_question = Question(
         session_id=question_data.session_id,
         client_request_id=str(question_data.client_request_id),
@@ -124,6 +149,14 @@ def create_question(
         language_code=question_data.language_code,
         search_from_at=question_data.search_from_at,
         search_to_at=question_data.search_to_at,
+
+        # Preserve the requested frame until the retrieval stage reads it.
+        retrieval_configuration=(
+            {"requested_frame_id": question_data.frame_id}
+            if question_data.frame_id is not None
+            else None
+        ),
+
         received_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
 

@@ -1,3 +1,4 @@
+
 """Generate accessible, evidence-grounded answers from retrieved frame images.
 
 The service reuses Member 2's retrieval results and the existing Answer and
@@ -21,14 +22,17 @@ from database.models.frame import Frame
 from database.models.session import Session as CaptureSession
 
 
+# Gemini model confirmed to work with the configured API key.
+DEFAULT_VLM_MODEL = "gemini-3.5-flash-lite"
+
 PROMPT_VERSION = "eyesight-vlm-grounding-v1"
-DEFAULT_VLM_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
 MAX_EVIDENCE_IMAGES = 3
 MAX_OUTPUT_TOKENS = 180
 
-# Keep the prompt focused on the user's immediate surroundings and prevent
-# the model from inventing details that are not visible in the supplied frames.
-SYSTEM_PROMPT = """You are EyeSight, a visual assistant for a blind or visually impaired person.
+
+# Keep the prompt focused on immediate surroundings and prevent invented details.
+SYSTEM_PROMPT = """You are EyeSight, an accessibility assistant, not Apple's EyeSight feature.
+Your purpose is to help blind and visually impaired users understand their immediate surroundings.
 Answer the user's question using ONLY the supplied camera frames.
 Be concise, concrete, and useful for immediate orientation.
 Never invent objects, text, distances, directions, identities, or events.
@@ -54,6 +58,7 @@ def utc_now():
 def _language_name(language_code):
     """Map the project's supported language codes to prompt instructions."""
     language = (language_code or "en").lower().split("-")[0]
+
     return {
         "en": "English",
         "fr": "French",
@@ -83,6 +88,7 @@ def _safe_frame_path(storage_key):
     frames_root = (storage_root / "frames").resolve()
     image_path = (storage_root / storage_key).resolve()
 
+    # Reject paths that point outside the permitted frames directory.
     if not image_path.is_relative_to(frames_root):
         raise ValueError("Frame storage key is outside the frames directory.")
 
@@ -92,6 +98,7 @@ def _safe_frame_path(storage_key):
 def load_question_images(db, question, retrieval):
     """Load only retrieved, unexpired frame images belonging to this session."""
     frame_refs = (retrieval or {}).get("frames", [])[:MAX_EVIDENCE_IMAGES]
+
     if not frame_refs:
         return []
 
@@ -100,12 +107,14 @@ def load_question_images(db, question, retrieval):
         for item in frame_refs
         if item.get("frame_id") is not None
     ]
+
     if not frame_ids:
         return []
 
-    # Recheck both frame and session retention immediately before reading bytes.
+    # Recheck both frame and session retention before reading image bytes.
     now = utc_now()
     session = db.get(CaptureSession, question.session_id)
+
     if session is None or session.history_expires_at <= now:
         return []
 
@@ -117,25 +126,32 @@ def load_question_images(db, question, retrieval):
             Frame.processing_status.in_(("ready", "partial")),
         )
     ).all()
+
     frames_by_id = {frame.frame_id: frame for frame in frames}
 
     images = []
+
     for rank, reference in enumerate(frame_refs, start=1):
         frame = frames_by_id.get(reference.get("frame_id"))
+
         if frame is None:
             continue
 
-        # Use the database's canonical storage key, not an arbitrary path
-        # supplied by the retrieval JSON.
+        # Use the database's canonical storage key, not a path from retrieval JSON.
         image_path = _safe_frame_path(frame.image_storage_key)
+
         if not image_path.is_file():
             continue
 
+        # Only send image formats supported by the service.
         mime_type = (frame.mime_type or "").lower()
+
         if mime_type not in ("image/jpeg", "image/png", "image/webp"):
             continue
 
+        # Convert the stored image into a data URL for the existing image pipeline.
         encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+
         images.append({
             "frame_id": frame.frame_id,
             "retrieval_rank": rank,
@@ -154,21 +170,34 @@ def parse_vlm_response(raw_text):
         raise VLMGenerationError("The vision model returned an empty response.")
 
     cleaned = raw_text.strip()
-    cleaned = re.sub(r"^\x60{3}(?:json)?\s*|\s*\x60{3}$", "", cleaned, flags=re.I)
 
-    # Some hosted models wrap JSON in a short explanation; extract the object.
+    # Remove optional Markdown JSON code fences.
+    cleaned = re.sub(
+        r"^```(?:json)?\s*|\s*```$",
+        "",
+        cleaned,
+        flags=re.I,
+    )
+
+    # Extract the JSON object if the model includes surrounding text.
     start = cleaned.find("{")
     end = cleaned.rfind("}")
+
     if start >= 0 and end > start:
         try:
             payload = json.loads(cleaned[start:end + 1])
+
             answer = str(payload.get("answer", "")).strip()
             answer_type = payload.get("answer_type", "uncertain")
             reason = payload.get("uncertainty_reason")
+
             if not answer:
                 raise ValueError("Missing answer text.")
+
+            # Never accept an unsupported answer classification.
             if answer_type not in ("grounded", "uncertain"):
                 answer_type = "uncertain"
+
             return {
                 "answer_text": answer[:4000],
                 "answer_type": answer_type,
@@ -176,97 +205,126 @@ def parse_vlm_response(raw_text):
                     str(reason)[:255] if reason else None
                 ),
             }
-        except (json.JSONDecodeError, AttributeError, ValueError, TypeError):
+
+        except (
+            json.JSONDecodeError,
+            AttributeError,
+            ValueError,
+            TypeError,
+        ):
             pass
 
-    # Never label unstructured output as fully grounded.
+    # Never label unstructured model output as fully grounded.
     return {
         "answer_text": cleaned[:4000],
         "answer_type": "uncertain",
-        "uncertainty_reason": "The model did not return a verifiable confidence classification.",
+        "uncertainty_reason": (
+            "The model did not return a verifiable confidence classification."
+        ),
     }
 
 
 def call_vision_model(question_text, language_code, images):
-    """Send the question and retrieved images to Hugging Face Inference."""
-    token = os.getenv("HF_TOKEN")
-    if not token:
-        raise VLMGenerationError("HF_TOKEN is not configured.")
-
-    model_id = os.getenv("VLM_MODEL", DEFAULT_VLM_MODEL)
-    endpoint_url = os.getenv("HF_INFERENCE_ENDPOINT_URL")
+    """Send the question and retrieved images to Google's Gemini API."""
 
     try:
-        from huggingface_hub import InferenceClient
+        from google import genai
+        from google.genai import types
 
-        # Use a dedicated Inference Endpoint when configured; otherwise use
-        # Hugging Face Inference Providers' automatic provider selection.
-        if endpoint_url:
-            client = InferenceClient(base_url=endpoint_url, token=token)
-        else:
-            client = InferenceClient(token=token)
+        # Read the Gemini credentials from the backend environment.
+        api_key = os.getenv("GEMINI_API_KEY")
 
-        user_content = [{
-            "type": "text",
-            "text": (
-                f"Answer this question: {question_text}\n"
-                f"Answer language: {_language_name(language_code)}.\n"
-                "The images are ordered from most relevant to least relevant. "
-                "Use only visible evidence."
-            ),
-        }]
+        if not api_key:
+            raise VLMGenerationError("GEMINI_API_KEY is not configured.")
 
-        # Attach the actual image bytes as data URLs; local file paths are
-        # never exposed to the remote inference provider.
-        for image in images:
-            user_content.append({
-                "type": "image_url",
-                "image_url": {"url": image["data_url"]},
-            })
+        # Read the selected model from .env, using the confirmed default.
+        model_id = os.getenv("VLM_MODEL", DEFAULT_VLM_MODEL)
 
-        response = client.chat_completion(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0.2,
+        # Initialize the cloud Gemini client.
+        client = genai.Client(api_key=api_key)
+
+        # Include the question and requested response language.
+        prompt = (
+            f"Answer this question: {question_text}\n"
+            f"Answer language: {_language_name(language_code)}.\n"
+            "The images are ordered from most relevant to least relevant. "
+            "Use only visible evidence. "
+            "If the evidence is insufficient, clearly state the uncertainty."
         )
-        raw_text = response.choices[0].message.content
-        if isinstance(raw_text, list):
-            raw_text = " ".join(
-                part.get("text", "")
-                for part in raw_text
-                if isinstance(part, dict)
+
+        # Start the request with the question text.
+        contents = [
+            types.Part.from_text(text=prompt)
+        ]
+
+        # Convert each existing base64 data URL into Gemini image bytes.
+        for image in images:
+            data_url = image["data_url"]
+
+            if "," not in data_url:
+                raise ValueError("Invalid image data URL.")
+
+            # Extract and decode the base64 image content.
+            encoded_image = data_url.split(",", 1)[1]
+            image_bytes = base64.b64decode(encoded_image)
+
+            # Attach the image with its correct MIME type.
+            contents.append(
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=image["mime_type"],
+                )
             )
 
+        # Generate the answer using Gemini's cloud API.
+        response = client.models.generate_content(
+            model=model_id,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+                temperature=0.2,
+            ),
+        )
+
+        raw_text = response.text
+
+        if not raw_text or not raw_text.strip():
+            raise VLMGenerationError("Gemini returned an empty response.")
+
+        # Reuse EyeSight's existing response parser.
         parsed = parse_vlm_response(raw_text)
+
+        # Preserve the existing return format for the rest of EyeSight.
         return parsed, model_id
 
     except VLMGenerationError:
         raise
+
     except Exception as error:
-        # Do not leak tokens, local paths, or provider response bodies to users.
+        # Avoid exposing API keys, local paths, or provider response details.
         raise VLMGenerationError(
             f"Vision-language inference failed ({type(error).__name__})."
         ) from error
 
 
 def _get_or_create_model(db, model_id):
-    """Register the exact VLM configuration used for this answer."""
+    """Register the exact Gemini configuration used for this answer."""
+
+    # Store the actual Gemini API configuration for this model.
     configuration = {
-        "api": "huggingface_inference_chat_completion",
+        "api": "google_genai_generate_content",
         "prompt_version": PROMPT_VERSION,
         "max_evidence_images": MAX_EVIDENCE_IMAGES,
     }
 
+    # Reuse an existing database record when its configuration matches.
     candidates = db.scalars(
         select(AIModel).where(
             AIModel.task == "vision_language",
-            AIModel.provider == "Hugging Face",
+            AIModel.provider == "Google Gemini",
             AIModel.model_name == model_id,
-            AIModel.model_revision == "main",
+            AIModel.model_revision == "api",
         )
     ).all()
 
@@ -274,80 +332,106 @@ def _get_or_create_model(db, model_id):
         if candidate.configuration == configuration:
             return candidate
 
+    # Register Gemini as the provider in the existing ai_models table.
     model = AIModel(
         task="vision_language",
-        provider="Hugging Face",
+        provider="Google Gemini",
         model_name=model_id,
-        model_revision="main",
+        model_revision="api",
         configuration=configuration,
     )
+
     db.add(model)
     db.flush()
+
     return model
 
 
 def generate_and_persist_answer(db, question):
     """Generate and save one answer plus its exact frame-evidence links."""
+
     existing = db.query(Answer).filter(
         Answer.question_id == question.question_id
     ).first()
+
     if existing is not None:
         # Make retries idempotent if a client repeats the processing request.
         if question.status != "completed":
             question.status = "completed"
             db.commit()
             db.refresh(question)
+
         return existing
 
     started = perf_counter()
     retrieval = question.retrieval_configuration or {}
+
+    # Reuse Member 2's retrieved frames; do not perform another search.
     images = load_question_images(db, question, retrieval)
 
     model_id = None
     generation_latency_ms = 0
     answer_type = "no_evidence"
     uncertainty_reason = "No unexpired retrieved frame images were available."
-    answer_text = _fallback_text(question.language_code, no_evidence=True)
+
+    # Use a safe fallback if no valid evidence images are available.
+    answer_text = _fallback_text(
+        question.language_code,
+        no_evidence=True,
+    )
+
+    # This becomes True only after Gemini successfully returns a response.
     provided_to_model = False
 
     if images:
         generation_started = perf_counter()
-        # Record that images were included in an inference request only when
-        # credentials exist; missing credentials produce a local fallback.
-        provided_to_model = bool(os.getenv("HF_TOKEN"))
+
         try:
             generated, model_name = call_vision_model(
                 question.question_text,
                 question.language_code,
                 images,
             )
+
             generation_latency_ms = round(
                 (perf_counter() - generation_started) * 1000
             )
+
+            # Register the model that actually generated this answer.
             model = _get_or_create_model(db, model_name)
             model_id = model.model_id
+
             answer_text = generated["answer_text"]
             answer_type = generated["answer_type"]
             uncertainty_reason = generated["uncertainty_reason"]
+
+            # The inference call returned successfully with the supplied images.
+            provided_to_model = True
+
         except VLMGenerationError:
             generation_latency_ms = round(
                 (perf_counter() - generation_started) * 1000
             )
+
             answer_type = "error_fallback"
             uncertainty_reason = "The vision-language model was unavailable."
             answer_text = _fallback_text(question.language_code)
 
-    retrieval_latency_ms = (retrieval or {}).get("retrieval_latency_ms")
-    # Measure end-to-end server time from question receipt when available;
-    # otherwise retain the local answer-stage duration for isolated tests.
+    retrieval_latency_ms = retrieval.get("retrieval_latency_ms")
+
+    # Measure end-to-end server time from question receipt when available.
     received_at = getattr(question, "received_at", None)
+
     if isinstance(received_at, datetime):
         total_latency_ms = max(
-            0, round((utc_now() - received_at).total_seconds() * 1000)
+            0,
+            round((utc_now() - received_at).total_seconds() * 1000),
         )
     else:
+        # Retain local answer-stage duration for isolated tests.
         total_latency_ms = round((perf_counter() - started) * 1000)
 
+    # Create the answer using the existing database model.
     answer = Answer(
         question_id=question.question_id,
         model_id=model_id,
@@ -367,28 +451,40 @@ def generate_and_persist_answer(db, question):
         db.add(answer)
         db.flush()
 
-        # Persist every retrieved frame and whether it was actually supplied
-        # to the VLM. Retrieval rank is retained for traceability.
+        # Persist the retrieved frames and their relationship to this answer.
         for image in images:
             similarity = image.get("similarity")
-            db.add(AnswerEvidence(
-                answer_id=answer.answer_id,
-                frame_id=image["frame_id"],
-                retrieval_rank=image["retrieval_rank"],
-                retrieval_method="semantic" if similarity is not None else "time",
-                semantic_score=similarity,
-                combined_score=similarity,
-                provided_to_model=provided_to_model,
-            ))
+
+            db.add(
+                AnswerEvidence(
+                    answer_id=answer.answer_id,
+                    frame_id=image["frame_id"],
+                    retrieval_rank=image["retrieval_rank"],
+
+                    # Use only values allowed by the existing database ENUM.
+                    retrieval_method=(
+                        "time"
+                        if retrieval.get("selection_mode") == "current_frame"
+                        else "semantic" if similarity is not None else "time"
+                    ),
+
+                    semantic_score=similarity,
+                    combined_score=similarity,
+                    provided_to_model=provided_to_model,
+                )
+            )
 
         # A fallback/no-evidence response is still a completed user response.
         question.status = "completed"
         question.error_code = None
+
         db.commit()
         db.refresh(answer)
         db.refresh(question)
+
         return answer
 
     except Exception:
+        # Roll back answer and evidence changes if persistence fails.
         db.rollback()
         raise

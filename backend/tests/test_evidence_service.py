@@ -60,3 +60,67 @@ def test_retrieve_question_evidence_preserves_empty_results(monkeypatch):
 
     assert result["count"] == 0
     assert result["frames"] == []
+
+def test_retrieve_question_evidence_uses_exact_current_frame(monkeypatch):
+    captured = {}
+
+    # Capture the retrieval arguments without loading Member 2's ML dependencies.
+    def fake_search_frames(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "frame_id": 52,
+                "image_storage_key": "frames/session-7/frame-52.jpg",
+                "captured_at": "2026-11-09T10:15:00",
+                "similarity": None,
+            }
+        ]
+
+    monkeypatch.setattr(evidence_service, "search_frames", fake_search_frames)
+
+    question = SimpleNamespace(
+        session_id=7,
+        question_text="What is in front of me?",
+        search_from_at=None,
+        search_to_at=None,
+        retrieval_configuration={"requested_frame_id": 52},
+    )
+
+    result = evidence_service.retrieve_question_evidence(question)
+
+    # The exact frame is requested without semantic embedding.
+    assert captured["session_id"] == 7
+    assert captured["frame_id"] == 52
+    assert captured["query"] is None
+    assert captured["top_k"] == 1
+
+    assert result["selection_mode"] == "current_frame"
+    assert result["count"] == 1
+    assert result["frames"][0]["frame_id"] == 52
+
+
+def test_retrieve_question_evidence_keeps_semantic_history_fallback(monkeypatch):
+    captured = {}
+
+    # Capture the normal past-frame search arguments.
+    def fake_search_frames(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(evidence_service, "search_frames", fake_search_frames)
+
+    question = SimpleNamespace(
+        session_id=7,
+        question_text="What is in front of me?",
+        search_from_at=None,
+        search_to_at=None,
+        retrieval_configuration=None,
+    )
+
+    result = evidence_service.retrieve_question_evidence(question)
+
+    assert "frame_id" not in captured
+    assert captured["query"] == question.question_text
+    assert captured["top_k"] == evidence_service.DEFAULT_TOP_K
+    assert result["selection_mode"] == "semantic_history"
+    assert result["count"] == 0
