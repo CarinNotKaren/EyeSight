@@ -1,3 +1,4 @@
+
 """Tests for VLM answer generation and answer-evidence persistence."""
 
 from types import SimpleNamespace
@@ -34,6 +35,8 @@ class FakeDB:
 
     def add(self, instance):
         self.added.append(instance)
+
+        # Simulate the database assigning an answer ID.
         if isinstance(instance, Answer):
             instance.answer_id = 81
 
@@ -65,6 +68,11 @@ def make_question():
             "frames": [],
         },
     )
+
+
+def test_default_vlm_model_is_gemini():
+    # Ensure the service uses the Gemini model selected for EyeSight.
+    assert answer_service.DEFAULT_VLM_MODEL == "gemini-3.5-flash-lite"
 
 
 def test_parse_vlm_response_reads_grounded_json():
@@ -118,10 +126,12 @@ def test_no_evidence_creates_safe_answer_without_calling_vlm(monkeypatch):
 
 
 def test_grounded_answer_persists_model_and_exact_frame_evidence(monkeypatch):
-    # Simulate configured credentials so the evidence flag is deterministic.
-    monkeypatch.setenv("HF_TOKEN", "test-token")
+    # Simulate configured Gemini credentials without using a real API key.
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+
     db = FakeDB()
     question = make_question()
+
     images = [{
         "frame_id": 41,
         "retrieval_rank": 1,
@@ -131,9 +141,12 @@ def test_grounded_answer_persists_model_and_exact_frame_evidence(monkeypatch):
         "similarity": 0.87,
     }]
 
+    # Simulate Member 2's retrieval result.
     monkeypatch.setattr(
         answer_service, "load_question_images", lambda *args: images
     )
+
+    # Simulate a successful Gemini response without making a network request.
     monkeypatch.setattr(
         answer_service,
         "call_vision_model",
@@ -143,9 +156,11 @@ def test_grounded_answer_persists_model_and_exact_frame_evidence(monkeypatch):
                 "answer_type": "grounded",
                 "uncertainty_reason": None,
             },
-            "Qwen/Qwen2.5-VL-3B-Instruct",
+            "gemini-3.5-flash-lite",
         ),
     )
+
+    # Avoid a real AIModel database lookup in this unit test.
     monkeypatch.setattr(
         answer_service,
         "_get_or_create_model",
@@ -153,6 +168,7 @@ def test_grounded_answer_persists_model_and_exact_frame_evidence(monkeypatch):
     )
 
     answer = answer_service.generate_and_persist_answer(db, question)
+
     evidence = next(
         item for item in db.added if isinstance(item, AnswerEvidence)
     )
@@ -171,8 +187,12 @@ def test_grounded_answer_persists_model_and_exact_frame_evidence(monkeypatch):
 
 
 def test_provider_failure_persists_error_fallback(monkeypatch):
+    # Configure Gemini credentials, but simulate an inference failure.
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+
     db = FakeDB()
     question = make_question()
+
     images = [{
         "frame_id": 41,
         "retrieval_rank": 1,
@@ -187,16 +207,21 @@ def test_provider_failure_persists_error_fallback(monkeypatch):
     )
 
     def fail_model(*args):
-        # Simulate a provider timeout without making a network request.
+        # Simulate a Gemini timeout without making a network request.
         raise answer_service.VLMGenerationError("provider timeout")
 
     monkeypatch.setattr(answer_service, "call_vision_model", fail_model)
 
     answer = answer_service.generate_and_persist_answer(db, question)
 
+    evidence = next(
+        item for item in db.added if isinstance(item, AnswerEvidence)
+    )
+
     assert answer.answer_type == "error_fallback"
     assert answer.model_id is None
     assert "try again" in answer.answer_text.lower()
     assert answer.uncertainty_reason
+    assert evidence.provided_to_model is False
     assert question.status == "completed"
     assert db.commit_count == 1

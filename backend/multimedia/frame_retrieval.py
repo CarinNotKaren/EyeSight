@@ -50,6 +50,7 @@ def search_frames(
     query=None,
     top_k=3,
     *,
+    frame_id=None,  # Retrieve one exact frame when supplied.
     object_label=None,
     ocr_text=None,
     captured_from=None,
@@ -57,6 +58,12 @@ def search_frames(
 ):
     if type(top_k) is not int or not 1 <= top_k <= 20:
         raise ValueError("top_k must be between 1 and 20.")
+
+        # A specific frame ID must be a positive integer.
+    if frame_id is not None and (
+        type(frame_id) is not int or frame_id <= 0
+    ):
+        raise ValueError("frame_id must be a positive integer.")
 
     for name, value in (
         ("query", query),
@@ -117,6 +124,11 @@ def search_frames(
                 Frame.processing_status.in_(("ready", "partial")),
             )
         )
+
+                # Restrict the result to the requested frame when one is supplied.
+        # The existing session and expiry conditions still apply.
+        if frame_id is not None:
+            statement = statement.where(Frame.frame_id == frame_id)
 
         if captured_from is not None:
             statement = statement.where(

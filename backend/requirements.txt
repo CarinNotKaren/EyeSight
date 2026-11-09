@@ -23,3 +23,4 @@ ultralytics==8.4.204 #small pretrained YOLO26n model to detect objects in the vi
                      #It detects useful categories such as person and couch. We still need broader accuracy and speed testing.
 open_clip_torch==4.2.1 #for semantic search of video frames, to find frames that are visually similar to a given frame.
 huggingface_hub>=0.34.0 #for Hugging Face hosted vision-language inference
+google-genai
