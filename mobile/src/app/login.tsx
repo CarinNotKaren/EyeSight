@@ -34,9 +34,9 @@ async function handleLogin() {
   setLoading(true);
 
   try {
-    await login(email.trim(), password);
-    Alert.alert("Success", "Login successful!");
-  } catch (error) {
+  await login(email.trim(), password);
+  router.replace("/(tabs)");
+}catch (error) {
     Alert.alert(
       "Login failed",
       error instanceof Error ? error.message : "Something went wrong"

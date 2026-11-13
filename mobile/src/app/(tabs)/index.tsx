@@ -1,6 +1,15 @@
-
+import { useRouter } from 'expo-router';
+import { logout } from '../../services/auth';
 import { useEffect, useState } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+   useAudioPlayer,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
 import {
   Alert,
   Platform,
@@ -14,8 +23,36 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
+    const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (loggingOut || sessionActive) return;
+
+    setLoggingOut(true);
+
+    try {
+      await logout();
+      router.replace('/login');
+    } catch (error) {
+      Alert.alert(
+        'Logout failed',
+        error instanceof Error ? error.message : 'Something went wrong'
+      );
+    } finally {
+      setLoggingOut(false);
+    }
+  }
   const [sessionActive, setSessionActive] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
+  // Microphone recording
+const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+const recorderState = useAudioRecorderState(audioRecorder);
+
+const [recordedAudioUri, setRecordedAudioUri] = useState<string | null>(null);
+const audioPlayer = useAudioPlayer(recordedAudioUri);
+const [recordingFinished, setRecordingFinished] = useState(false);
   const { width, height } = useWindowDimensions();
 
 const [screenReady, setScreenReady] = useState(false);
@@ -54,13 +91,96 @@ const isShortScreen = responsiveHeight < 650;
     Alert.alert('EyeSight', 'Session stopped!');
   }
 
-  function askQuestion() {
+  async function askQuestion() {
+  try {
+    // Stop recording if the user is already recording
+    if (recorderState.isRecording) {
+      await audioRecorder.stop();
+
+      const uri = audioRecorder.uri;
+      setRecordedAudioUri(uri);
+      setRecordingFinished(!!uri);
+
+      Alert.alert(
+        'EyeSight',
+        uri
+          ? 'Your question was recorded successfully!'
+          : 'Recording stopped, but no audio file was found.'
+      );
+
+      return;
+    }
+
+    // Request microphone permission
+    const permission = await requestRecordingPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert(
+        'Microphone Permission',
+        'EyeSight needs microphone access to record your questions.'
+      );
+      return;
+    }
+
+    // Configure audio recording
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+    });
+
+    // Prepare and start recording
+    await audioRecorder.prepareToRecordAsync();
+    audioRecorder.record();
+
+    setRecordedAudioUri(null);
+    setRecordingFinished(false);
+
+  } catch (error) {
     Alert.alert(
-      'EyeSight',
-      'Microphone and AI will be connected in the next steps.'
+      'Recording Error',
+      error instanceof Error
+        ? error.message
+        : 'Something went wrong while recording.'
     );
   }
+}
+async function playRecording() {
+  if (!recordedAudioUri) {
+    Alert.alert('EyeSight', 'No recording available.');
+    return;
+  }
 
+  try {
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+    });
+
+    await audioPlayer.seekTo(0);
+    audioPlayer.play();
+
+  } catch (error) {
+    Alert.alert(
+      'Playback Error',
+      error instanceof Error
+        ? error.message
+        : 'Unable to play recording.'
+    );
+  }
+}
+
+async function handleQuestionButton() {
+  if (recorderState.isRecording) {
+    await askQuestion();
+
+  } else if (recordingFinished) {
+    await playRecording();
+    setRecordingFinished(false);
+
+  } else {
+    await askQuestion();
+  }
+}
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -157,27 +277,65 @@ const isShortScreen = responsiveHeight < 650;
               </Text>
             </TouchableOpacity>
 
+            
+{/* Play Recorded Question */}
+
+
             <TouchableOpacity
-              style={[
-                styles.questionButton,
-                !sessionActive && styles.disabledButton,
-              ]}
-              onPress={askQuestion}
-              disabled={!sessionActive}
-              accessibilityRole="button"
-              accessibilityLabel="Ask EyeSight a question"
-              accessibilityState={{ disabled: !sessionActive }}
-            >
-              <Text style={styles.buttonText}>
-                Ask a Question
-              </Text>
-            </TouchableOpacity>
-          </View>
+  style={[
+    styles.questionButton,
+    recorderState.isRecording && styles.recordingButton,
+    recordingFinished &&
+      !recorderState.isRecording &&
+      styles.playButton,
+    !sessionActive && styles.disabledButton,
+  ]}
+  onPress={handleQuestionButton}
+  disabled={!sessionActive}
+  accessibilityRole="button"
+  accessibilityLabel={
+    recorderState.isRecording
+      ? 'Stop recording'
+      : recordingFinished
+        ? 'Play recorded question'
+        : 'Ask EyeSight a question'
+  }
+  accessibilityState={{ disabled: !sessionActive }}
+>
+  <Text style={styles.buttonText}>
+    {recorderState.isRecording
+      ? 'Stop Recording'
+      : recordingFinished
+        ? 'Play Recording'
+        : 'Ask a Question'}
+  </Text>
+</TouchableOpacity>
+{/* Logout Button */}
+<TouchableOpacity
+  style={[
+    styles.logoutButton,
+    (loggingOut || sessionActive) && styles.disabledButton,
+  ]}
+  onPress={handleLogout}
+  disabled={loggingOut || sessionActive}
+  accessibilityRole="button"
+  accessibilityLabel="Log out of EyeSight"
+  accessibilityState={{
+    disabled: loggingOut || sessionActive,
+    busy: loggingOut,
+  }}
+>
+  <Text style={styles.logoutButtonText}>
+    {loggingOut ? 'Logging out...' : 'Logout'}
+  </Text>
+</TouchableOpacity>
         </View>
+         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -273,11 +431,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  recordingButton: {
+  backgroundColor: '#B42318',
+},
+playButton: {
+  backgroundColor: '#475569',
+  paddingVertical: 18,
+  paddingHorizontal: 12,
+  minHeight: 60,
+  borderRadius: 14,
+  marginTop: 12,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
   disabledButton: {
     opacity: 0.4,
   },
-  buttonText: {
+   buttonText: {
     color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+
+  logoutButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#B42318',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    minHeight: 60,
+    borderRadius: 14,
+    marginTop: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  logoutButtonText: {
+    color: '#B42318',
     fontSize: 20,
     fontWeight: 'bold',
     textAlign: 'center',

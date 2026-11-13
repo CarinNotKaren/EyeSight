@@ -41,7 +41,17 @@
           "recordAudioAndroid": false
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-status-bar",
+      "expo-web-browser",
+      [
+  "expo-audio",
+  {
+    "microphonePermission": "Allow EyeSight to use your microphone to record spoken questions.",
+    "recordAudioAndroid": true,
+    "enableBackgroundRecording": false
+  }
+]
     ],
     "experiments": {
       "typedRoutes": true,
