@@ -10,18 +10,40 @@ from paddleocr import PaddleOCR
 
 
 MIN_CONFIDENCE = 0.80
-
-# Limit the largest image dimension to reduce OCR inference memory usage.
 MAX_OCR_IMAGE_DIMENSION = 1280
 
+DETECTION_MODEL = "PP-OCRv5_mobile_det"
 
-@lru_cache(maxsize=1)
-def get_reader():
-    """Load the OCR models once and reuse them."""
+RECOGNITION_MODELS = {
+    "en": "en_PP-OCRv5_mobile_rec",
+    "fr": "latin_PP-OCRv5_mobile_rec",
+    "ar": "arabic_PP-OCRv5_mobile_rec",
+}
+
+
+def normalize_language(language):
+    """Validate and normalize a supported language code."""
+    if not isinstance(language, str):
+        raise ValueError("OCR language must be en, fr, or ar.")
+
+    # Accept regional codes such as fr-FR or ar-LB.
+    language = language.strip().lower().replace("_", "-").split("-")[0]
+
+    if language not in RECOGNITION_MODELS:
+        raise ValueError("OCR language must be en, fr, or ar.")
+
+    return language
+
+
+@lru_cache(maxsize=3)
+def get_reader(language="en"):
+    """Load each requested language reader once per process."""
+    language = normalize_language(language)
+
     return PaddleOCR(
         device="cpu",
-        text_detection_model_name="PP-OCRv6_medium_det",
-        text_recognition_model_name="PP-OCRv6_medium_rec",
+        text_detection_model_name=DETECTION_MODEL,
+        text_recognition_model_name=RECOGNITION_MODELS[language],
         enable_mkldnn=False,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
@@ -32,10 +54,12 @@ def get_reader():
 def extract_text(
     frame: np.ndarray,
     min_confidence: float = MIN_CONFIDENCE,
+    *,
+    language: str = "en",
 ) -> list[dict]:
-    """Return filtered OCR readings with coordinates mapped to the original frame."""
+    """Read text using the selected language and original-image coordinates."""
+    language = normalize_language(language)
 
-    # Validate the original image before preprocessing.
     if not isinstance(frame, np.ndarray) or frame.size == 0:
         raise ValueError("Frame must be a non-empty NumPy array.")
 
@@ -48,10 +72,8 @@ def extract_text(
     if not math.isfinite(min_confidence) or not 0 <= min_confidence <= 1:
         raise ValueError("Minimum confidence must be between 0 and 1.")
 
-    # Remember the original dimensions so detected coordinates can be restored.
     original_height, original_width = frame.shape[:2]
 
-    # Resize only when the image exceeds the configured maximum dimension.
     scale = min(
         1.0,
         MAX_OCR_IMAGE_DIMENSION / max(original_width, original_height),
@@ -69,13 +91,11 @@ def extract_text(
     else:
         ocr_frame = frame
 
-    # Calculate separate scale factors to account for resizing-rounding differences.
     ocr_height, ocr_width = ocr_frame.shape[:2]
     scale_x = original_width / ocr_width
     scale_y = original_height / ocr_height
 
-    # Run OCR on the resized image instead of the full-resolution original.
-    results = get_reader().predict(input=ocr_frame)
+    results = get_reader(language).predict(input=ocr_frame)
     regions = []
 
     for result in results:
@@ -88,7 +108,6 @@ def extract_text(
             text = str(text).strip()
             confidence = float(score)
 
-            # Reject invalid or low-confidence recognition results.
             if (
                 not math.isfinite(confidence)
                 or not 0 <= confidence <= 1
@@ -96,17 +115,25 @@ def extract_text(
             ):
                 continue
 
-            # Reject empty or punctuation-only readings.
             if not any(character.isalnum() for character in text):
                 continue
 
-            # Convert polygon coordinates back to the original image dimensions.
+            coordinates = np.asarray(polygon, dtype=np.float64)
+
+            if (
+                coordinates.ndim != 2
+                or coordinates.shape[1] != 2
+                or coordinates.shape[0] < 3
+                or not np.isfinite(coordinates).all()
+            ):
+                raise ValueError("OCR returned an invalid text polygon.")
+
             original_polygon = [
                 [
                     float(x) * scale_x,
                     float(y) * scale_y,
                 ]
-                for x, y in polygon
+                for x, y in coordinates
             ]
 
             regions.append({

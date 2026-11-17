@@ -73,6 +73,8 @@ def import_video_frames(report_path: str):
             demo_user = User(
                 display_name="Local video test",
                 preferred_language="en",
+                email=f"video-test-{uuid4().hex}@fixture.invalid",
+                password_hash="!",
             )
             demo_device = Device(
                 installation_id=str(uuid4()),
