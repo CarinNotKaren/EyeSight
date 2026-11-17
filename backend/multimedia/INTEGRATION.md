@@ -423,3 +423,70 @@ Local test session 20, frame 51, used cup_bottle.jpg:
 This verifies the local upload, processing, database and object-search
 flow for this photo. It does not verify authenticated HTTP endpoints,
 user ownership checks, mobile upload or spoken-answer integration.
+
+## OCR and semantic-query updates - 17 November 2026
+
+Current OCR models:
+- Detector: PP-OCRv5_mobile_det.
+- English: en_PP-OCRv5_mobile_rec.
+- French: latin_PP-OCRv5_mobile_rec.
+- Arabic: arabic_PP-OCRv5_mobile_rec.
+- Confidence remains 0.80; maximum image dimension remains 1280.
+- MKL-DNN remains disabled; no explicit CPU-thread override was adopted.
+
+All three sign fixtures matched their reference text at original size,
+25 percent dimensions and 30 percent brightness. Blank images returned
+no accepted text. These controlled tests do not establish general accuracy.
+
+Frames 52, 53 and 54 passed full processing, model-metadata checks,
+saved-text checks, repeated processing and OCR retrieval.
+
+Repeated full-pipeline times were:
+- English: 2.10 seconds.
+- French: 2.23 seconds.
+- Arabic: 2.09 seconds.
+
+The first English pipeline run took 31.91 seconds and included initial
+model loading. Later language runs reused YOLO and CLIP.
+
+Mobile OCR on the real bottle photo took 8.09 seconds warm, compared
+with about 64-66 seconds for the previous medium models. It returned
+fewer accepted regions and still missed the complete bottle name.
+The faster configuration has an accuracy tradeoff on this scene.
+
+The semantic_query.py helper preserves the original question and
+prepares an English query for CLIP. English bypasses translation;
+French and Arabic use text-only Gemini requests.
+
+The caller must load the backend environment. GEMINI_API_KEY is required
+for translation. SEMANTIC_QUERY_MODEL overrides VLM_MODEL; one model
+setting must be explicitly configured.
+
+Translation failures raise QueryTranslationError without silent fallback.
+Translation adds API usage and measured 1.57-3.77 seconds in this test.
+
+On three scenes, correct top-ranked images were:
+- Direct CLIP: English 3/3, French 2/3, Arabic 1/3.
+- With query preparation: English 3/3, French 3/3, Arabic 3/3.
+
+These are small-sample ranking results, not overall accuracy percentages.
+One Arabic translation narrowed "chairs" to "armchairs"; translation
+meaning still needs broader evaluation.
+
+The helper is NOT connected to assistant/evidence_service.py yet.
+The backend owner should use its search_query for semantic-history
+retrieval, preserve the original question and preparation metadata,
+and handle translation failures. Exact-frame retrieval needs no translation.
+
+Install test dependencies with:
+python -m pip install -r requirements-test.txt
+
+Run offline helper tests with:
+python -m pytest tests/test_semantic_query.py -q
+
+Ten tests passed for validation, English bypass, original-question
+preservation, language normalization, model selection, missing credentials
+and propagation of translation failures.
+
+Database-backed translated retrieval, real forced termination,
+database outages and concurrent operations remain to be checked.

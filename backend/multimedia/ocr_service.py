@@ -12,10 +12,10 @@ from paddleocr import PaddleOCR
 MIN_CONFIDENCE = 0.80
 MAX_OCR_IMAGE_DIMENSION = 1280
 
-DETECTION_MODEL = "PP-OCRv6_medium_det"
+DETECTION_MODEL = "PP-OCRv5_mobile_det"
 
 RECOGNITION_MODELS = {
-    "en": "PP-OCRv6_medium_rec",
+    "en": "en_PP-OCRv5_mobile_rec",
     "fr": "latin_PP-OCRv5_mobile_rec",
     "ar": "arabic_PP-OCRv5_mobile_rec",
 }
