@@ -316,3 +316,45 @@ overall accuracy percentage.
 
 A temporary OCR limit of 640 improved some large-image timings.
 Further accuracy evaluation is needed before changing the default.
+
+## Recover an interrupted processing run
+
+If a frame remains marked `processing` after a worker exits:
+
+1. Stop the worker responsible for that frame.
+2. Inspect the frame's pipeline run ID in MySQL.
+3. Preview recovery using that exact run ID.
+4. Apply recovery, then retry processing.
+
+Preview:
+
+```powershell
+python -m multimedia.frame_recovery --frame FRAME_ID --run-id RUN_ID
+```
+
+Apply after stopping the affected workers:
+
+```powershell
+python -m multimedia.frame_recovery --frame FRAME_ID --run-id RUN_ID --apply --workers-stopped
+```
+
+Replace FRAME_ID and RUN_ID with the actual values.
+
+Recovery checks the frame status, run ID, frame expiry, and session expiry.
+It marks the frame failed so the normal pipeline can retry it.
+
+The workers-stopped flag is operator confirmation. The tool does not
+detect whether a worker is alive.
+
+Verified using a simulated worker exit:
+- Existing processing claim blocked a normal run.
+- Wrong run ID was rejected without changing the claim.
+- Preview preserved the processing state.
+- Recovery updated both status fields.
+- A retry completed with a new run ID and ready status.
+
+Actual forced process termination and database outage scenarios still
+need validation.
+
+Manual recovery is available through multimedia.frame_recovery after
+the affected workers have stopped. Database availability is required.
