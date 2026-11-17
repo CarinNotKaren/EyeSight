@@ -111,7 +111,9 @@ Ctrl+C records an interrupted run as `partial` or `failed` when the
 database is available, then propagates the interruption.
 
 Forced termination or database outages can leave a frame marked
-`processing`. Controlled recovery for these situations remains pending.
+`processing`. Manual recovery is available through `multimedia.frame_recovery`
+after the affected workers have stopped and the database is available.
+See the recovery section below.
 
 Processing is synchronous. The backend integration must arrange how
 processing is scheduled and how the mobile app learns it has finished.
@@ -300,7 +302,8 @@ At confidence threshold 0.25:
 - Incorrectly labelled the glass lamp as a vase, score 0.344.
 - Blank image still produced no detections.
 
-The default remains 0.35 pending evaluation on more images.
+The default remains 0.35. Additional comparisons and the decision
+are recorded below.
 These observations are a small qualitative test, not a measured
 overall accuracy percentage.
 
@@ -358,3 +361,65 @@ need validation.
 
 Manual recovery is available through multimedia.frame_recovery after
 the affected workers have stopped. Database availability is required.
+
+## Additional detection evaluation and storage verification
+
+Date: 17 November 2026.
+
+Seven distinct photos were evaluated across the experiments, with a
+plain white image used as a negative check.
+
+Decision: retain YOLO26n on CPU, image size 640, confidence threshold 0.35.
+YOLO26s and image size 1280 were tested separately; application settings
+were not changed by these experiments.
+
+### Additional three-photo comparison
+
+Both models used image size 640 and confidence threshold 0.35.
+
+| Photo | YOLO26n | YOLO26s |
+|---|---|---|
+| cup_bottle.jpg | Correct bottle, cup and laptop | Correct bottle and laptop; cup labelled bottle; red zippered item labelled book |
+| people_new.jpg | Correctly detected all three people | Correctly detected all three people |
+| furniture.jpg | Detected main seats, TV, plant and vase; missed both tables; cut flowers labelled potted plant | Similar main detections and missed tables; cut flowers labelled potted plant; duplicate vase prediction |
+
+The furniture image includes a cropped foreground seat. Its couch
+prediction was not treated as a duplicate of the main sofa.
+
+YOLO26n warm average times on these three photos were 0.049 to 0.071
+seconds. YOLO26s times were 0.294 to 0.350 seconds in separate runs.
+These are local observations, not controlled hardware benchmarks.
+
+Lowering confidence to 0.25 previously added both useful predictions
+and incorrect labels. Raising it to 0.50 would also discard some
+correct detections observed in these tests.
+
+All tested white-image checks produced zero detections. This does not
+establish a general false-positive rate.
+
+These are qualitative observations, not an overall accuracy percentage.
+The detector can miss important objects and produce incorrect labels.
+Answer generation should select relevant information for the question
+and account for uncertainty. No main-object ranking or storage cap
+was added by these experiments.
+
+### Real-photo processing and object retrieval
+
+Local test session 20, frame 51, used cup_bottle.jpg:
+
+- Camera upload created a frame successfully.
+- All three pipeline stages completed with overall status ready.
+- OCR saved 10 regions; their text accuracy was not assessed in this test.
+- Object detection saved one bottle, one laptop and one cup.
+- Model metadata confirmed YOLO26n, image size 640 and threshold 0.35.
+- Saved confidence values and normalized boxes passed validation.
+- Image embedding completed with 512 dimensions.
+- Returned, frame and pipeline metadata statuses agreed.
+- Cup, bottle and laptop searches each returned the uploaded frame.
+- Uppercase CUP also matched.
+- An exact-frame search under another session returned no result.
+- The new test session was ended afterward.
+
+This verifies the local upload, processing, database and object-search
+flow for this photo. It does not verify authenticated HTTP endpoints,
+user ownership checks, mobile upload or spoken-answer integration.
