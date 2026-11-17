@@ -490,3 +490,50 @@ and propagation of translation failures.
 
 Database-backed translated retrieval, real forced termination,
 database outages and concurrent operations remain to be checked.
+
+## Additional integration and reliability validation - 17 November 2026
+
+Database-backed prepared-query retrieval:
+- Session 24, frames 55-57: all processing stages completed as ready.
+- English, French and Arabic each ranked the intended frame first for
+  all three tested scenes after query preparation.
+- The helper remains separate from the question API.
+
+Worker termination:
+- Session 25, frame 58: a dedicated child process was forcibly stopped
+  after claiming the frame, while paused before OCR inference.
+- A competing processing attempt respected the claim.
+- Recovery preview preserved state; applying recovery saved failed
+  in both status fields.
+- A real retry completed as ready with a new run ID.
+
+Database-exception handling:
+- Session 26, frame 59: an injected OperationalError propagated to
+  the caller and prevented later model stages from running.
+- The frame was not falsely marked ready.
+- Explicit recovery followed by a real retry succeeded.
+- This did not reproduce a real MySQL server or network outage.
+
+Concurrent uploads:
+- Session 27: four simultaneous uploads created distinct frame IDs,
+  unique storage keys and sequence numbers 0-3.
+- Saved image bytes matched the originals.
+- Four simultaneous duplicate-history uploads were skipped without
+  adding frame records.
+- This was a small concurrency test, not a load benchmark.
+
+Cleanup during a processing claim:
+- Session 29, frame 65: a worker paused before OCR inference.
+- Session-scoped cleanup preserved the unexpired processing frame.
+- After expiry was simulated on that test frame, cleanup removed its
+  record and original image.
+- The resumed worker returned skipped and did not recreate deleted data.
+- This did not test deletion during active model inference.
+
+The agreed independent validation checks are complete within these
+test conditions. Broader accuracy evaluation, real outages, sustained
+load and additional concurrency timings remain future validation.
+
+Team integration still includes session/upload endpoints, ownership
+checks, processing scheduling, translation-helper connection, automatic
+cleanup startup and the complete mobile question-to-spoken-answer flow.
