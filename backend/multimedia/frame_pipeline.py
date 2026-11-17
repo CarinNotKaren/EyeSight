@@ -93,6 +93,7 @@ def record_progress(frame_id, run_id, outcomes, final_status=None):
 
             if final_status is not None:
                 completed_at = utc_now()
+                pipeline["status"] = final_status
                 pipeline["completed_at_utc"] = completed_at.isoformat()
                 frame.processing_status = final_status
                 frame.processed_at = completed_at
@@ -102,8 +103,6 @@ def record_progress(frame_id, run_id, outcomes, final_status=None):
 
 
 def record_unavailable(frame_id, run_id, outcomes, reason):
-    # Record only why processing stopped.
-    # Do not run models, extend retention, or create missing rows.
     with SessionLocal() as db:
         with db.begin():
             frame = db.scalar(
@@ -118,7 +117,7 @@ def record_unavailable(frame_id, run_id, outcomes, reason):
             details = dict(frame.processing_details or {})
             pipeline = dict(details.get("pipeline") or {})
 
-            # Do not alter another worker's processing state.
+            # Only the worker that owns this run can update its state.
             if pipeline.get("run_id") != run_id:
                 return
 
@@ -145,8 +144,7 @@ def record_unavailable(frame_id, run_id, outcomes, reason):
             details["pipeline"] = pipeline
             frame.processing_details = details
 
-            # The database enum has no "expired" status.
-            # The reason above distinguishes expiry from model failure.
+            # Store the reason in metadata to distinguish expiry from model failure.
             frame.processing_status = "failed"
             frame.processed_at = stopped_at
 
@@ -204,12 +202,11 @@ def process_frame(frame_id):
                 }
 
             except SQLAlchemyError:
-                # Stop on database failures; progress cannot be trusted
-                # until it can be saved.
+                # Stop the run if the database cannot save progress.
                 raise
 
             except Exception as error:
-                # Check whether expiry/deletion caused the stage to stop.
+                # Check whether expiry or deletion caused the stage to stop.
                 verify_available(frame_id)
 
                 outcomes[name] = {
