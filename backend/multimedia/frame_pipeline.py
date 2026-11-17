@@ -144,8 +144,63 @@ def record_unavailable(frame_id, run_id, outcomes, reason):
             details["pipeline"] = pipeline
             frame.processing_details = details
 
-            # Store the reason in metadata to distinguish expiry from model failure.
+            # Metadata distinguishes expiry from model failure.
             frame.processing_status = "failed"
+            frame.processed_at = stopped_at
+
+
+def record_interrupted(frame_id, run_id, outcomes):
+    """Release this run's processing state after a Ctrl+C interruption."""
+    with SessionLocal() as db:
+        with db.begin():
+            frame = db.scalar(
+                select(Frame)
+                .where(Frame.frame_id == frame_id)
+                .with_for_update()
+            )
+
+            if frame is None:
+                return
+
+            details = dict(frame.processing_details or {})
+            pipeline = dict(details.get("pipeline") or {})
+
+            if (
+                pipeline.get("run_id") != run_id
+                or frame.processing_status != "processing"
+            ):
+                return
+
+            stages = dict(outcomes)
+
+            for name in STAGE_NAMES:
+                if name not in stages:
+                    stages[name] = {
+                        "status": "skipped",
+                        "reason": "pipeline_interrupted",
+                    }
+                    details[name] = dict(stages[name])
+                elif stages[name]["status"] == "failed":
+                    details[name] = dict(stages[name])
+
+            completed = sum(
+                outcome["status"] == "completed"
+                for outcome in stages.values()
+            )
+
+            status = "partial" if completed > 0 else "failed"
+            stopped_at = utc_now()
+
+            pipeline.update({
+                "status": status,
+                "interruption_reason": "keyboard_interrupt",
+                "stages": stages,
+                "completed_at_utc": stopped_at.isoformat(),
+            })
+
+            details["pipeline"] = pipeline
+            frame.processing_details = details
+            frame.processing_status = status
             frame.processed_at = stopped_at
 
 
@@ -243,6 +298,10 @@ def process_frame(frame_id):
 
         return {"status": status, "stages": outcomes}
 
+    except KeyboardInterrupt:
+        record_interrupted(frame_id, run_id, outcomes)
+        raise
+
     except FrameUnavailableError as error:
         reason = str(error)
         record_unavailable(frame_id, run_id, outcomes, reason)
@@ -293,9 +352,13 @@ def main():
             result = process_frame(frame_id)
             print(f"Frame {frame_id}: {result}", flush=True)
 
+    except KeyboardInterrupt:
+        print("\nPipeline stopped by user.", flush=True)
+        raise SystemExit(130)
+
     except SQLAlchemyError as error:
         print(
-            f"Pipeline stopped because of a database error "
+            "Pipeline stopped because of a database error "
             f"({type(error).__name__}).",
             flush=True,
         )
