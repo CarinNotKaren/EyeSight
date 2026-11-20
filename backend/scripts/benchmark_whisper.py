@@ -26,12 +26,16 @@ def main():
     )
     args = parser.parse_args()
 
+    # Test both model sizes using exactly the same recordings.
+    # This makes the comparison fair: each model receives the same audio input.
     for model_name in ("base", "small"):
+        # The transcription service reads this setting to decide which model to use.
         os.environ["WHISPER_MODEL"] = model_name
 
         print(f"\n=== Whisper {model_name.title()} ===")
 
-        # Measure checkpoint loading separately from audio inference.
+        # Measure the first model load separately. Loading weights can take time,
+        # but that is different from the time Whisper spends transcribing a recording.
         loading_started = perf_counter()
         _load_model(model_name)
         loading_seconds = perf_counter() - loading_started
@@ -44,12 +48,16 @@ def main():
                 print({"file": path.name, "error": "file not found"})
                 continue
 
+            # Start the timer immediately before transcription so this value
+            # represents the processing time for this particular recording.
             inference_started = perf_counter()
 
             try:
                 result = transcribe_audio(str(path), args.language)
                 inference_seconds = perf_counter() - inference_started
 
+                # Keep the transcript in the output so we can compare not only
+                # speed, but also whether Base and Small recognize the same words.
                 print({
                     "file": path.name,
                     "language": result["language"],
@@ -58,6 +66,8 @@ def main():
                     "transcript": result["transcript"],
                 })
             except Exception as error:
+                # One bad or unreadable file should not stop the benchmark
+                # from continuing with the remaining recordings.
                 print({
                     "file": path.name,
                     "error": type(error).__name__,
