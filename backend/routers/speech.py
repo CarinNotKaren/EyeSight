@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from assistant.speech_to_text import (
     SUPPORTED_LANGUAGES,
@@ -29,7 +29,7 @@ ALLOWED_AUDIO_EXTENSIONS = {
 @router.post(
     "/transcribe",
     response_model=SpeechTranscriptionResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=200,
 )
 def transcribe_speech(
     file: UploadFile = File(...),
@@ -42,7 +42,7 @@ def transcribe_speech(
 
             if language not in SUPPORTED_LANGUAGES:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=422,
                     detail="language must be one of: en, fr, ar.",
                 )
 
@@ -50,7 +50,7 @@ def transcribe_speech(
 
         if suffix not in ALLOWED_AUDIO_EXTENSIONS:
             raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                status_code=415,
                 detail="Unsupported audio file format.",
             )
 
@@ -59,13 +59,13 @@ def transcribe_speech(
 
         if not audio_bytes:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail="The uploaded audio file is empty.",
             )
 
         if len(audio_bytes) > MAX_AUDIO_SIZE_BYTES:
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=413,
                 detail="Audio upload exceeds the 25 MB limit.",
             )
 
@@ -86,13 +86,13 @@ def transcribe_speech(
         raise
     except ValueError as error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=str(error),
         ) from error
     except SpeechTranscriptionError as error:
         # Do not expose local paths, model internals, or provider details.
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Speech transcription is temporarily unavailable.",
         ) from error
     finally:
