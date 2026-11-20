@@ -41,8 +41,15 @@ def _load_model(model_name):
         ) from error
 
 
-def _normalize_language(language_name):
-    """Convert Whisper's detected language name into the project's ISO code."""
+def _normalize_language(language_value):
+    """Normalize Whisper's detected language value to en, fr, or ar."""
+    value = (language_value or "").strip().lower()
+
+    # Whisper's transcribe() result normally already contains an ISO code.
+    if value in SUPPORTED_LANGUAGES:
+        return value
+
+    # Also accept a language name, which is useful for mocked/test responses.
     try:
         import whisper
 
@@ -50,7 +57,7 @@ def _normalize_language(language_name):
             name.lower(): code
             for code, name in whisper.tokenizer.LANGUAGES.items()
         }
-        return language_codes.get(language_name.lower())
+        return language_codes.get(value)
     except Exception:
         return None
 
@@ -102,7 +109,7 @@ def transcribe_audio(audio_path: str, language: str | None = None) -> dict:
             raise SpeechTranscriptionError("No speech could be recognized.")
 
         # Return the explicitly selected language, otherwise normalize detection.
-        normalized_language = language or _normalize_language(detected_language or "")
+        normalized_language = language or _normalize_language(detected_language)
 
         if normalized_language not in SUPPORTED_LANGUAGES:
             raise SpeechTranscriptionError(
