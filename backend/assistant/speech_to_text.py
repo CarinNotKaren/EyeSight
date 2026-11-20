@@ -1,7 +1,8 @@
 """Local Whisper speech-to-text service for EyeSight.
 
-The model is loaded lazily and reused across requests. The API route owns
-temporary audio files; this module only handles model inference.
+The API router receives and temporarily stores the uploaded recording.
+This service takes that file, asks Whisper to recognize the spoken words,
+and returns the transcript plus information about the recording.
 """
 
 import os
@@ -32,7 +33,8 @@ def _load_model(model_name):
     try:
         import whisper
 
-        # Keep CPU as the default for compatibility with the team's laptops.
+        # CPU is the default so this also works on laptops without a supported GPU.
+        # WHISPER_DEVICE can be changed later if we decide to use an available GPU.
         device = os.getenv("WHISPER_DEVICE", "cpu").strip().lower()
         return whisper.load_model(model_name, device=device)
     except Exception as error:
@@ -45,11 +47,13 @@ def _normalize_language(language_value):
     """Normalize Whisper's detected language value to en, fr, or ar."""
     value = (language_value or "").strip().lower()
 
-    # Whisper's transcribe() result normally already contains an ISO code.
+    # Whisper usually gives us short codes such as 'en' and 'fr'.
+    # This first check handles that normal response without extra work.
     if value in SUPPORTED_LANGUAGES:
         return value
 
-    # Also accept a language name, which is useful for mocked/test responses.
+    # If a language name is returned instead (for example, 'french'),
+    # convert it to the short code expected by EyeSight's API.
     try:
         import whisper
 
@@ -89,11 +93,17 @@ def transcribe_audio(audio_path: str, language: str | None = None) -> dict:
     try:
         import whisper
 
-        # Decode and resample audio once; the same samples provide duration.
+        # Whisper cannot work directly with the uploaded file handle.
+        # load_audio decodes the file and converts it into the audio format
+        # Whisper expects (16 kHz audio samples).
         audio = whisper.load_audio(str(path))
+
+        # Because the samples are now at 16,000 samples per second,
+        # dividing their count by 16,000 gives the recording length in seconds.
         duration_seconds = round(len(audio) / whisper.audio.SAMPLE_RATE, 2)
 
-        # Use the selected language or allow Whisper to detect it automatically.
+        # If the user chose a language, tell Whisper which language to listen for.
+        # If language is None, Whisper detects the spoken language automatically.
         result = model.transcribe(
             audio,
             language=language,
@@ -105,10 +115,13 @@ def transcribe_audio(audio_path: str, language: str | None = None) -> dict:
         transcript = (result.get("text") or "").strip()
         detected_language = result.get("language")
 
+        # Whisper can return an empty string for silence or audio it cannot
+        # understand. We treat that as a failed transcription, not a valid answer.
         if not transcript:
             raise SpeechTranscriptionError("No speech could be recognized.")
 
-        # Return the explicitly selected language, otherwise normalize detection.
+        # Use the language selected by the user when available.
+        # Otherwise, convert Whisper's detected language into our API language code.
         normalized_language = language or _normalize_language(detected_language)
 
         if normalized_language not in SUPPORTED_LANGUAGES:
@@ -125,6 +138,8 @@ def transcribe_audio(audio_path: str, language: str | None = None) -> dict:
     except SpeechTranscriptionError:
         raise
     except Exception as error:
+        # Convert low-level Whisper/FFmpeg errors into one service-level error.
+        # The API route will turn this into a safe HTTP response for the app.
         raise SpeechTranscriptionError(
             f"Audio transcription failed ({type(error).__name__})."
         ) from error
