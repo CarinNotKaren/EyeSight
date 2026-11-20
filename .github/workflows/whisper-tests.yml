@@ -1,0 +1,41 @@
+name: Whisper API tests
+
+on:
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "backend/assistant/speech_to_text.py"
+      - "backend/routers/speech.py"
+      - "backend/schemas/speech.py"
+      - "backend/tests/test_speech.py"
+      - "backend/scripts/benchmark_whisper.py"
+      - ".github/workflows/whisper-tests.yml"
+
+jobs:
+  whisper-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "fastapi>=0.110" python-multipart "pydantic>=2" pytest httpx
+
+      - name: Compile Whisper modules
+        run: |
+          python -m compileall assistant/speech_to_text.py routers/speech.py schemas/speech.py tests/test_speech.py
+
+      - name: Run Whisper API and service tests
+        run: |
+          python -m pytest tests/test_speech.py -v

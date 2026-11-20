@@ -17,6 +17,7 @@ from database.dependencies import get_db
 # Import application routers after loading the environment.
 from routers.auth import router as auth_router
 from routers.questions import router as questions_router
+from routers.speech import router as speech_router
 
 
 # Create the main FastAPI application.
@@ -26,9 +27,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Register the authentication and question endpoints.
+# Register the authentication, question, and speech endpoints.
 app.include_router(auth_router)
 app.include_router(questions_router)
+app.include_router(speech_router)
 
 
 @app.get("/")
@@ -74,3 +76,4 @@ def check_database_session(db: Session = Depends(get_db)):
             "status": "error",
             "message": "Database query failed"
         }
+}

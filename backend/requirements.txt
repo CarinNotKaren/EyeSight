@@ -24,3 +24,6 @@ ultralytics==8.4.204 #small pretrained YOLO26n model to detect objects in the vi
 open_clip_torch==4.2.1 #for semantic search of video frames, to find frames that are visually similar to a given frame.
 huggingface_hub>=0.34.0 #for Hugging Face hosted vision-language inference
 google-genai
+
+# Member 3: local Whisper speech-to-text integration (Base/Small comparison).
+openai-whisper
