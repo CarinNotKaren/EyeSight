@@ -9,6 +9,7 @@ on:
       - "backend/routers/speech.py"
       - "backend/schemas/speech.py"
       - "backend/tests/test_speech.py"
+      - "backend/scripts/benchmark_whisper.py"
       - ".github/workflows/whisper-tests.yml"
 
 jobs:
