@@ -1,11 +1,12 @@
-"""Tests for audio upload validation and the Whisper service contract."""
+"""Tests for the audio upload endpoint and Whisper service contract."""
 
 import sys
 from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.testclient import TestClient
 
 from assistant import speech_to_text
 from routers import speech as speech_router
@@ -34,6 +35,29 @@ def test_transcribe_route_returns_whisper_result(monkeypatch):
     )
 
     assert result == expected
+
+
+def test_http_endpoint_accepts_multipart_audio_and_returns_schema(monkeypatch):
+    # Exercise the actual HTTP route and Pydantic response validation.
+    expected = {
+        "transcript": "Bonjour, comment allez-vous?",
+        "language": "fr",
+        "duration_seconds": 3.1,
+    }
+    monkeypatch.setattr(speech_router, "transcribe_audio", lambda **kwargs: expected)
+
+    app = FastAPI()
+    app.include_router(speech_router.router)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/speech/transcribe",
+            files={"file": ("question.m4a", b"mock audio", "audio/mp4")},
+            data={"language": "fr"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == expected
 
 
 def test_transcribe_route_allows_automatic_language_detection(monkeypatch):
