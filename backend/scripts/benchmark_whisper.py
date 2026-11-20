@@ -3,8 +3,8 @@
 Run from backend:
     python -m scripts.benchmark_whisper path/to/en.wav path/to/fr.wav path/to/ar.wav
 
-Set WHISPER_DEVICE=cpu for a CPU benchmark. The script reports model loading
-separately from per-file transcription time. Audio files stay local.
+Run separately with --language en, --language fr, and --language ar for
+controlled language-specific comparisons. Audio files stay local.
 """
 
 import argparse
@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from time import perf_counter
 
-from assistant.speech_to_text import transcribe_audio
+from assistant.speech_to_text import _load_model, transcribe_audio
 
 
 def main():
@@ -31,24 +31,30 @@ def main():
 
         print(f"\n=== Whisper {model_name.title()} ===")
 
+        # Measure checkpoint loading separately from audio inference.
+        loading_started = perf_counter()
+        _load_model(model_name)
+        loading_seconds = perf_counter() - loading_started
+        print({"model_load_seconds": round(loading_seconds, 3)})
+
         for audio_file in args.audio_files:
             path = Path(audio_file)
 
             if not path.is_file():
-                print(f"{path}: file not found")
+                print({"file": path.name, "error": "file not found"})
                 continue
 
-            started = perf_counter()
+            inference_started = perf_counter()
 
             try:
                 result = transcribe_audio(str(path), args.language)
-                elapsed = perf_counter() - started
+                inference_seconds = perf_counter() - inference_started
 
                 print({
                     "file": path.name,
                     "language": result["language"],
                     "duration_seconds": result["duration_seconds"],
-                    "transcription_seconds": round(elapsed, 3),
+                    "transcription_seconds": round(inference_seconds, 3),
                     "transcript": result["transcript"],
                 })
             except Exception as error:
