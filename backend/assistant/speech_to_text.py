@@ -9,7 +9,14 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-SUPPORTED_LANGUAGES = {"en", "fr", "ar"}
+# Language codes supported by the installed OpenAI Whisper package.
+# These codes were taken directly from whisper.tokenizer.LANGUAGES.
+# EyeSight currently supports English, French, and Arabic only.
+SUPPORTED_LANGUAGES = frozenset({
+    "en",
+    "fr",
+    "ar",
+})
 DEFAULT_MODEL_NAME = "base"
 
 

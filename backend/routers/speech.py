@@ -1,5 +1,7 @@
+
 """Audio upload and Whisper transcription endpoint owned by Member 3."""
 
+import logging
 import tempfile
 from pathlib import Path
 
@@ -11,6 +13,10 @@ from assistant.speech_to_text import (
     transcribe_audio,
 )
 from schemas.speech import SpeechTranscriptionResponse
+
+
+# Keep detailed errors in the backend terminal, not in API responses.
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/speech",
@@ -38,20 +44,19 @@ def transcribe_speech(
     language: str | None = Form(default=None),
 ):
     """Validate an uploaded recording, transcribe it, and return the transcript."""
+
     try:
-        # The language field is optional. When it is missing, Whisper will
-        # listen first and detect whether the speaker is using English, French, or Arabic.
+        # The language field is optional. If omitted, Whisper detects it automatically.
         if language is not None:
             language = language.strip().lower()
 
             if language not in SUPPORTED_LANGUAGES:
                 raise HTTPException(
                     status_code=422,
-                    detail="language must be one of: en, fr, ar.",
+                    detail="The selected language is not supported by Whisper.",
                 )
 
         # Check the filename extension before passing the recording to FFmpeg.
-        # This rejects obviously unsupported uploads such as PDF or image files.
         suffix = Path(file.filename or "").suffix.lower()
 
         if suffix not in ALLOWED_AUDIO_EXTENSIONS:
@@ -61,8 +66,7 @@ def transcribe_speech(
             )
 
         # Read only up to the allowed size plus one extra byte.
-        # That extra byte tells us whether the file crossed the limit without
-        # loading an unnecessarily large upload entirely into memory.
+        # The extra byte tells us whether the upload exceeds the limit.
         audio_bytes = file.file.read(MAX_AUDIO_SIZE_BYTES + 1)
 
         if not audio_bytes:
@@ -77,16 +81,13 @@ def transcribe_speech(
                 detail="Audio upload exceeds the 25 MB limit.",
             )
 
-        # Whisper/FFmpeg needs a file path to open the recording.
-        # We copy the upload into a temporary folder instead of keeping users'
-        # recordings permanently on the server. TemporaryDirectory removes it
-        # automatically when this block finishes, including after transcription.
+        # Store the recording temporarily for Whisper and FFmpeg.
+        # TemporaryDirectory removes the file automatically afterward.
         with tempfile.TemporaryDirectory(prefix="eyesight_audio_") as temp_dir:
             temporary_audio_path = Path(temp_dir) / f"recording{suffix}"
             temporary_audio_path.write_bytes(audio_bytes)
 
-            # The service handles the actual Whisper model and speech recognition.
-            # This router handles the HTTP upload and turns the result into an API response.
+            # The service handles the actual Whisper model and recognition.
             result = transcribe_audio(
                 audio_path=str(temporary_audio_path),
                 language=language,
@@ -95,22 +96,26 @@ def transcribe_speech(
         return result
 
     except HTTPException:
-        # Keep the specific status codes above (413, 415, and 422).
+        # Preserve the specific validation status codes (413, 415, and 422).
         raise
+
     except ValueError as error:
-        # Invalid service input, such as an unsupported language, is a client error.
+        # Invalid service input is a client error.
         raise HTTPException(
             status_code=422,
             detail=str(error),
         ) from error
+
     except SpeechTranscriptionError as error:
-        # The model may be missing, FFmpeg may fail, or Whisper may not recognize speech.
-        # Return a general message rather than exposing server paths or internal details.
+        # Log the original exception and traceback for local debugging.
+        # The API still returns a safe, generic message to the mobile app.
+        logger.exception("Speech transcription failed.")
+
         raise HTTPException(
             status_code=503,
             detail="Speech transcription is temporarily unavailable.",
         ) from error
+
     finally:
-        # FastAPI gives us a file handle for the incoming upload.
-        # Close it after success or failure so the backend does not leave it open.
+        # Close the uploaded file handle after success or failure.
         file.file.close()
