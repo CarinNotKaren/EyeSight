@@ -19,12 +19,26 @@ from routers.auth import router as auth_router
 from routers.questions import router as questions_router
 from routers.speech import router as speech_router
 
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 
 # Create the main FastAPI application.
 app = FastAPI(
     title="EyeSight API",
     description="Backend API for the EyeSight visual assistant.",
     version="1.0.0"
+)
+
+# Allow the local React/Vite frontend to communicate with FastAPI.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Register the authentication, question, and speech endpoints.
@@ -76,4 +90,3 @@ def check_database_session(db: Session = Depends(get_db)):
             "status": "error",
             "message": "Database query failed"
         }
-}
