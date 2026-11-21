@@ -12,7 +12,8 @@ class SpeechTranscriptionResponse(BaseModel):
 
     # Use the same short language codes throughout the project:
     # en = English, fr = French, and ar = Arabic.
-    language: str = Field(pattern="^(en|fr|ar)$")
+    # Accept every language supported by the installed Whisper package.
+    language: str
 
     # How long the original recording was, in seconds.
     # It is optional in case a caller does not have duration information,
