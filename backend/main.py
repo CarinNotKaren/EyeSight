@@ -17,7 +17,10 @@ from database.dependencies import get_db
 # Import application routers after loading the environment.
 from routers.auth import router as auth_router
 from routers.questions import router as questions_router
+from routers.speech import router as speech_router
 
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 
 # Create the main FastAPI application.
 app = FastAPI(
@@ -26,9 +29,22 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Register the authentication and question endpoints.
+# Allow the local React/Vite frontend to communicate with FastAPI.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register the authentication, question, and speech endpoints.
 app.include_router(auth_router)
 app.include_router(questions_router)
+app.include_router(speech_router)
 
 
 @app.get("/")
