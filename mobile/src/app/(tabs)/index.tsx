@@ -11,6 +11,8 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import { getInstallationId, getDevicePlatform } from '../../services/device';
+import * as Speech from 'expo-speech';
+import { transcribeRecording } from '../../services/speech';
 import {
   Alert,
   Platform,
@@ -101,24 +103,80 @@ const isShortScreen = responsiveHeight < 650;
     Alert.alert('EyeSight', 'Session stopped!');
   }
 
+async function speakAnswer(
+  text: string,
+  language: string = 'en'
+) {
+  try {
+    // Stop any previous speech
+    Speech.stop();
+
+    // Speak the AI answer
+    Speech.speak(text, {
+      language,
+      rate: 0.9,
+      pitch: 1.0,
+      onError: (error) => {
+        console.error('Text-to-Speech Error:', error);
+      },
+    });
+  } catch (error) {
+    console.error('Speech Error:', error);
+  }
+}
+
+
   async function askQuestion() {
   try {
     // Stop recording if the user is already recording
     if (recorderState.isRecording) {
       await audioRecorder.stop();
 
-      const uri = audioRecorder.uri;
-      setRecordedAudioUri(uri);
-      setRecordingFinished(!!uri);
+      
+const uri = audioRecorder.uri;
+setRecordedAudioUri(uri);
+setRecordingFinished(!!uri);
 
-      Alert.alert(
-        'EyeSight',
-        uri
-          ? 'Your question was recorded successfully!'
-          : 'Recording stopped, but no audio file was found.'
-      );
+if (!uri) {
+  Alert.alert('EyeSight', 'No audio file was found.');
+  return;
+}
 
-      return;
+// Send the recorded audio to Whisper
+const result = await transcribeRecording(uri);
+
+console.log('Whisper Transcript:', result.transcript);
+console.log('Detected Language:', result.language);
+console.log('Duration:', result.duration_seconds);
+
+
+Alert.alert(
+  'EyeSight - Whisper',
+  `Your question: ${result.transcript}`,
+  [
+    {
+      text: 'OK',
+    },
+    {
+      text: 'Test Voice',
+      onPress: async () => {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+
+        speakAnswer(
+          'Hello! I am EyeSight, your AI visual assistant.',
+          'en'
+        );
+      },
+    },
+  ]
+);
+
+
+return;
+
     }
 
     // Request microphone permission
@@ -146,13 +204,13 @@ const isShortScreen = responsiveHeight < 650;
     setRecordingFinished(false);
 
   } catch (error) {
-    Alert.alert(
-      'Recording Error',
-      error instanceof Error
-        ? error.message
-        : 'Something went wrong while recording.'
-    );
-  }
+  Alert.alert(
+    'Recording or Transcription Error',
+    error instanceof Error
+      ? error.message
+      : 'Something went wrong while recording or transcribing.'
+  );
+}
 }
 async function playRecording() {
   if (!recordedAudioUri) {
