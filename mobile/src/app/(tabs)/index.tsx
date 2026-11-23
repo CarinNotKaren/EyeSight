@@ -10,6 +10,7 @@ import {
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
 } from 'expo-audio';
+import { getInstallationId, getDevicePlatform } from '../../services/device';
 import {
   Alert,
   Platform,
@@ -69,6 +70,15 @@ const isTablet = responsiveWidth >= 600 && responsiveWidth < 900;
 const isShortScreen = responsiveHeight < 650;
 
   async function startSession() {
+    try {
+  const installationId = await getInstallationId();
+  const platform = getDevicePlatform();
+
+  console.log('EyeSight Installation ID:', installationId);
+  console.log('Device Platform:', platform);
+} catch (error) {
+  console.error('Device identification error:', error);
+}
     let cameraPermission = permission;
 
     if (!cameraPermission?.granted) {
