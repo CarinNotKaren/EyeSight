@@ -1,6 +1,6 @@
 
 import * as SecureStore from "expo-secure-store";
-export const API_BASE_URL = "http://172.20.10.3:8000";
+// Set EXPO_PUBLIC_API_BASE_URL in the mobile environment for each network.\n// The fallback preserves the current development LAN address.\nexport const API_BASE_URL = (\n  process.env.EXPO_PUBLIC_API_BASE_URL || "http://172.20.10.3:8000"\n).replace(/\\/+$/, "");
 
 
 
