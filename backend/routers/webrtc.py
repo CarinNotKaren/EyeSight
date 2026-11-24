@@ -116,6 +116,10 @@ def _set_stream_status(session_id: int, status_value: str) -> None:
         ).first()
 
         if capture_session is not None:
+            # An ended session must remain stopped even if its signaling socket
+            # finishes cleanup after the REST end-session request.
+            if capture_session.status == "ended":
+                status_value = "stopped"
             capture_session.stream_status = status_value
             if status_value == "live" and capture_session.status == "starting":
                 capture_session.status = "active"
