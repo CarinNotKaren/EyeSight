@@ -18,12 +18,23 @@ from database.dependencies import get_db
 from routers.auth import router as auth_router
 from routers.questions import router as questions_router
 from routers.speech import router as speech_router
+from routers.webrtc import router as webrtc_router
+from multimedia.webrtc_receiver import webrtc_receiver
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
+# Close active peer connections during a graceful application shutdown.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await webrtc_receiver.close_all()
+
+
 # Create the main FastAPI application.
 app = FastAPI(
+    lifespan=lifespan,
     title="EyeSight API",
     description="Backend API for the EyeSight visual assistant.",
     version="1.0.0"
@@ -45,6 +56,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(questions_router)
 app.include_router(speech_router)
+app.include_router(webrtc_router)
 
 
 @app.get("/")
