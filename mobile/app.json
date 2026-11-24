@@ -8,7 +8,8 @@
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.eyesight.visualassistant"
     },
     "android": {
       "adaptiveIcon": {
@@ -41,7 +42,19 @@
           "recordAudioAndroid": false
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-status-bar",
+      "expo-web-browser",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow EyeSight to use your microphone to record spoken questions.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false
+        }
+      ],
+      "@config-plugins/react-native-webrtc",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
