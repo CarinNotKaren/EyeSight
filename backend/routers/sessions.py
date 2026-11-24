@@ -167,7 +167,8 @@ def create_capture_session(
         user_id=user_id,
         device_id=device.device_id,
         language_code=data.language_code,
-        # The WebRTC receiver promotes this to active after ICE connects.\n        status="starting",
+        # The WebRTC receiver promotes this to active after ICE connects.
+        status="starting",
         stream_status="connecting",
         started_at=now,
         consented_at=now,
