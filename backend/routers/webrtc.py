@@ -88,7 +88,7 @@ def _get_owned_active_session(
             detail="Capture session was not found."
         )
 
-    if capture_session.status != "active":
+    if capture_session.status not in ("starting", "active"):
         raise HTTPException(
             status_code=409,
             detail="Capture session is not active."
@@ -117,6 +117,8 @@ def _set_stream_status(session_id: int, status_value: str) -> None:
 
         if capture_session is not None:
             capture_session.stream_status = status_value
+            if status_value == "live" and capture_session.status == "starting":
+                capture_session.status = "active"
             capture_session.last_heartbeat_at = (
                 datetime.now(timezone.utc).replace(tzinfo=None)
             )
