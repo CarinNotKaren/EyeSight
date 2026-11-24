@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, ForeignKey, text
+from sqlalchemy import Column, String, ForeignKey, Index, text
 from sqlalchemy.dialects import mysql
 
 from database.base import Base
