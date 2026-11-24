@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, text
+from sqlalchemy import Column, String, ForeignKey, text
 from sqlalchemy.dialects import mysql
 
 from database.base import Base
@@ -11,6 +11,13 @@ class Device(Base):
         mysql.BIGINT(unsigned=True),
         primary_key=True,
         autoincrement=True
+    )
+
+    # Nullable only to support legacy installations created before ownership tracking.
+    user_id = Column(
+        mysql.BIGINT(unsigned=True),
+        ForeignKey("users.user_id", ondelete="RESTRICT"),
+        nullable=True
     )
 
     installation_id = Column(
