@@ -6,6 +6,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -73,8 +74,7 @@ def register_device(
     db: Session = Depends(get_db),
 ):
     """Create or refresh the installation record for an authenticated user."""
-    # The current schema identifies a physical installation globally; session
-    # ownership is enforced separately through the authenticated user_id.
+    # Installation IDs are unique; ownership prevents another account claiming a device.
     device = db.query(Device).filter(
         Device.installation_id == str(data.installation_id)
     ).first()
@@ -106,7 +106,26 @@ def register_device(
         device.app_version = data.app_version
         device.last_seen_at = now
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Handle two simultaneous first registrations of the same installation.
+        db.rollback()
+        existing = db.query(Device).filter(
+            Device.installation_id == str(data.installation_id)
+        ).first()
+        if existing is None or existing.user_id != user_id:
+            raise HTTPException(
+                status_code=409,
+                detail="This device installation is already registered",
+            )
+        existing.device_name = data.device_name
+        existing.platform = data.platform
+        existing.app_version = data.app_version
+        existing.last_seen_at = now
+        db.commit()
+        device = existing
+
     db.refresh(device)
 
     return {
@@ -122,7 +141,7 @@ def create_capture_session(
     user_id: int = Depends(_get_user_id),
     db: Session = Depends(get_db),
 ):
-    """Create an active capture session after explicit recording consent."""
+    """Create a pending capture session after explicit recording consent."""
     if not data.consent:
         raise HTTPException(
             status_code=400,
@@ -148,7 +167,7 @@ def create_capture_session(
         user_id=user_id,
         device_id=device.device_id,
         language_code=data.language_code,
-        status="active",
+        # The WebRTC receiver promotes this to active after ICE connects.\n        status="starting",
         stream_status="connecting",
         started_at=now,
         consented_at=now,
@@ -194,6 +213,10 @@ def end_capture_session(
         capture_session.last_heartbeat_at = now
         db.commit()
         db.refresh(capture_session)
+
+    # Release the media peer immediately when the REST session is ended.
+    from multimedia.webrtc_receiver import webrtc_receiver
+    await webrtc_receiver.close_stream(session_id)
 
     return {
         "session_id": capture_session.session_id,
