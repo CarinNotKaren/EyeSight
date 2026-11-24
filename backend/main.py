@@ -19,6 +19,7 @@ from routers.auth import router as auth_router
 from routers.questions import router as questions_router
 from routers.speech import router as speech_router
 from routers.webrtc import router as webrtc_router
+from routers.sessions import router as sessions_router
 from multimedia.webrtc_receiver import webrtc_receiver
 from contextlib import asynccontextmanager
 
@@ -57,6 +58,7 @@ app.include_router(auth_router)
 app.include_router(questions_router)
 app.include_router(speech_router)
 app.include_router(webrtc_router)
+app.include_router(sessions_router)
 
 
 @app.get("/")
