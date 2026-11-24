@@ -167,6 +167,39 @@ python -m multimedia.frame_pipeline --session SESSION_ID
 
 For deployment, run this command as a supervised worker for pending frames. Do not run two workers against the same claimed frame.
 
+## Spoken question to VLM answer
+
+The mobile app can continue using the existing Whisper endpoint. After transcription returns `transcript` and `language`, submit that text to the existing question pipeline:
+
+```http
+POST /api/questions/
+Content-Type: application/json
+
+{
+  "session_id": 123,
+  "client_request_id": "GENERATE-A-NEW-UUID",
+  "input_type": "text",
+  "question_text": "What is in front of me?",
+  "language_code": "en"
+}
+```
+
+The response contains `question_id`. Start retrieval and VLM generation:
+
+```http
+POST /api/questions/QUESTION_ID/process
+```
+
+Then retrieve the persisted answer:
+
+```http
+GET /api/questions/QUESTION_ID/answer
+```
+
+If the answer is not available yet, retry the answer GET after a short delay. The answer includes `answer_text`, `language_code`, and `answer_type`. The mobile client can pass `answer_text` to its text-to-speech playback. A new UUID must be generated for each distinct user question; reuse the same UUID only when retrying that same request.
+
+This uses the existing Whisper and question/VLM services; it does not modify Member 1's mobile implementation.
+
 ## Dashboard preview
 
 Connect the dashboard to:
