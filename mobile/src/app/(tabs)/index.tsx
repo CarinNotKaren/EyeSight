@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { logout } from '../../services/auth';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   useAudioRecorder,
@@ -23,6 +23,20 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+
+import {
+  MediaStream,
+  RTCPeerConnection,
+  RTCView,
+} from 'react-native-webrtc';
+
+import {
+  startCameraStream,
+  createPeerConnection,
+  createWebRTCOffer,
+  closeWebRTCConnection,
+} from '../../services/webrtc';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
@@ -47,6 +61,12 @@ export default function HomeScreen() {
     }
   }
   const [sessionActive, setSessionActive] = useState(false);
+
+const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null);
+
+const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+const streamRef = useRef<MediaStream | null>(null);
+
   const [permission, requestPermission] = useCameraPermissions();
   // Microphone recording
 const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -70,17 +90,14 @@ const responsiveHeight = screenReady ? height : 800;
 const isWideScreen = responsiveWidth >= 900;
 const isTablet = responsiveWidth >= 600 && responsiveWidth < 900;
 const isShortScreen = responsiveHeight < 650;
+async function startSession() {
+  try {
+    const installationId = await getInstallationId();
+    const platform = getDevicePlatform();
 
-  async function startSession() {
-    try {
-  const installationId = await getInstallationId();
-  const platform = getDevicePlatform();
+    console.log('EyeSight Installation ID:', installationId);
+    console.log('Device Platform:', platform);
 
-  console.log('EyeSight Installation ID:', installationId);
-  console.log('Device Platform:', platform);
-} catch (error) {
-  console.error('Device identification error:', error);
-}
     let cameraPermission = permission;
 
     if (!cameraPermission?.granted) {
@@ -95,13 +112,57 @@ const isShortScreen = responsiveHeight < 650;
       return;
     }
 
-    setSessionActive(true);
-  }
+    // Start the WebRTC camera.
+    const stream = await startCameraStream();
+    streamRef.current = stream;
 
-  function stopSession() {
+    // Create the WebRTC peer connection.
+    const peerConnection = createPeerConnection(stream);
+    peerConnectionRef.current = peerConnection;
+
+    // Display the camera preview.
+    setWebrtcStream(stream);
+    setSessionActive(true);
+
+    console.log('EyeSight WebRTC camera started');
+
+  } catch (error) {
+    closeWebRTCConnection(
+      peerConnectionRef.current,
+      streamRef.current
+    );
+
+    peerConnectionRef.current = null;
+    streamRef.current = null;
+
+    setWebrtcStream(null);
     setSessionActive(false);
-    Alert.alert('EyeSight', 'Session stopped!');
+
+    Alert.alert(
+      'WebRTC Error',
+      error instanceof Error
+        ? error.message
+        : 'Unable to start WebRTC camera.'
+    );
   }
+}
+function stopSession() {
+  // Close WebRTC and release the camera.
+  closeWebRTCConnection(
+    peerConnectionRef.current,
+    streamRef.current
+  );
+
+  // Clear the stored resources.
+  peerConnectionRef.current = null;
+  streamRef.current = null;
+
+  setWebrtcStream(null);
+  setSessionActive(false);
+
+  Alert.alert('EyeSight', 'Session stopped!');
+}
+
 
 async function speakAnswer(
   text: string,
@@ -132,7 +193,7 @@ async function speakAnswer(
     if (recorderState.isRecording) {
       await audioRecorder.stop();
 
-      
+
 const uri = audioRecorder.uri;
 setRecordedAudioUri(uri);
 setRecordingFinished(!!uri);
@@ -290,22 +351,21 @@ async function handleQuestionButton() {
               {sessionActive ? 'Active' : 'Inactive'}
             </Text>
           </View>
-
-          {sessionActive && (
-            <View
-              style={[
-                styles.cameraContainer,
-                isWideScreen && styles.wideCamera,
-              ]}
-            >
-              <CameraView
-                style={styles.camera}
-                facing="back"
-                active={sessionActive}
-              />
-            </View>
-          )}
-
+{sessionActive && webrtcStream && (
+  <View
+    style={[
+      styles.cameraContainer,
+      isWideScreen && styles.wideCamera,
+    ]}
+  >
+    <RTCView
+      style={styles.camera}
+      streamURL={webrtcStream.toURL()}
+      objectFit="cover"
+      mirror={false}
+    />
+  </View>
+)}
           <View
             style={[
               styles.buttonContainer,
@@ -345,7 +405,7 @@ async function handleQuestionButton() {
               </Text>
             </TouchableOpacity>
 
-            
+
 {/* Play Recorded Question */}
 
 
