@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +14,8 @@ from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 
 from multimedia.camera_frame_storage import save_camera_frame
+from database.connection import SessionLocal
+from database.models.frame import Frame
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,7 @@ class WebRTCReceiver:
         self._streams: dict[int, StreamState] = {}
         self._viewers: dict[int, set[asyncio.Queue]] = {}
         self._lock = asyncio.Lock()
+        self._pipeline_tasks: dict[int, asyncio.Task] = {}
 
     async def create_stream(self, session_id: int, owner_user_id: int) -> StreamState:
         async with self._lock:
@@ -145,6 +150,7 @@ class WebRTCReceiver:
                     state.last_frame_id = frame_id
                     state.saved_frames += 1
                     logger.info("Saved WebRTC frame %s for session %s", frame_id, state.session_id)
+                    self._schedule_frame_processing(state.session_id)
 
         except asyncio.CancelledError:
             raise
@@ -182,6 +188,66 @@ class WebRTCReceiver:
 
     def get_stream(self, session_id: int) -> StreamState | None:
         return self._streams.get(session_id)
+
+
+    def _has_pending_frames(self, session_id: int) -> bool:
+        """Check whether this session has frames waiting for Member 2's pipeline."""
+        with SessionLocal() as db:
+            return db.query(Frame.frame_id).filter(
+                Frame.session_id == session_id,
+                Frame.processing_status == "pending",
+            ).first() is not None
+
+    def _schedule_frame_processing(self, session_id: int) -> None:
+        """Run the synchronous ML pipeline in a child process, not the media loop."""
+        current = self._pipeline_tasks.get(session_id)
+        if current and not current.done():
+            return
+        task = asyncio.create_task(self._run_frame_pipeline(session_id))
+        self._pipeline_tasks[session_id] = task
+        task.add_done_callback(
+            lambda completed: asyncio.create_task(
+                self._restart_if_pending(session_id, completed)
+            )
+        )
+
+    async def _run_frame_pipeline(self, session_id: int) -> bool:
+        """Start Member 2's pending-frame worker as a separate Python process."""
+        backend_dir = Path(__file__).resolve().parents[1]
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "multimedia.webrtc_pipeline_worker",
+            "--session",
+            str(session_id),
+            cwd=str(backend_dir),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return_code = await process.wait()
+        if return_code != 0:
+            logger.error("Frame worker exited with code %s for session %s", return_code, session_id)
+            return False
+        return True
+
+    async def _restart_if_pending(self, session_id: int, completed: asyncio.Task) -> None:
+        """Catch frames saved just as a previous worker was exiting."""
+        if self._pipeline_tasks.get(session_id) is completed:
+            self._pipeline_tasks.pop(session_id, None)
+        if completed.cancelled():
+            return
+        try:
+            succeeded = completed.result()
+        except Exception:
+            logger.exception("Frame worker failed for session %s", session_id)
+            return
+        if not succeeded:
+            return
+        try:
+            if self._has_pending_frames(session_id) and session_id in self._streams:
+                self._schedule_frame_processing(session_id)
+        except Exception:
+            logger.exception("Could not check pending frames for session %s", session_id)
 
     async def add_ice_candidate(self, session_id: int, payload: dict) -> None:
         """Apply a trickled ICE candidate from the mobile peer."""
