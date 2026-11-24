@@ -1,6 +1,18 @@
-
-import { useEffect, useState } from 'react';
+import { useRouter } from 'expo-router';
+import { logout } from '../../services/auth';
+import { useEffect, useRef, useState } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+   useAudioPlayer,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
+import { getInstallationId, getDevicePlatform } from '../../services/device';
+import * as Speech from 'expo-speech';
+import { transcribeRecording } from '../../services/speech';
 import {
   Alert,
   Platform,
@@ -11,11 +23,59 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+
+import {
+  MediaStream,
+  RTCPeerConnection,
+  RTCView,
+} from 'react-native-webrtc';
+
+import {
+  startCameraStream,
+  createPeerConnection,
+  createWebRTCOffer,
+  closeWebRTCConnection,
+} from '../../services/webrtc';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
+    const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (loggingOut || sessionActive) return;
+
+    setLoggingOut(true);
+
+    try {
+      await logout();
+      router.replace('/login');
+    } catch (error) {
+      Alert.alert(
+        'Logout failed',
+        error instanceof Error ? error.message : 'Something went wrong'
+      );
+    } finally {
+      setLoggingOut(false);
+    }
+  }
   const [sessionActive, setSessionActive] = useState(false);
+
+const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null);
+
+const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+const streamRef = useRef<MediaStream | null>(null);
+
   const [permission, requestPermission] = useCameraPermissions();
+  // Microphone recording
+const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+const recorderState = useAudioRecorderState(audioRecorder);
+
+const [recordedAudioUri, setRecordedAudioUri] = useState<string | null>(null);
+const audioPlayer = useAudioPlayer(recordedAudioUri);
+const [recordingFinished, setRecordingFinished] = useState(false);
   const { width, height } = useWindowDimensions();
 
 const [screenReady, setScreenReady] = useState(false);
@@ -30,8 +90,14 @@ const responsiveHeight = screenReady ? height : 800;
 const isWideScreen = responsiveWidth >= 900;
 const isTablet = responsiveWidth >= 600 && responsiveWidth < 900;
 const isShortScreen = responsiveHeight < 650;
+async function startSession() {
+  try {
+    const installationId = await getInstallationId();
+    const platform = getDevicePlatform();
 
-  async function startSession() {
+    console.log('EyeSight Installation ID:', installationId);
+    console.log('Device Platform:', platform);
+
     let cameraPermission = permission;
 
     if (!cameraPermission?.granted) {
@@ -46,21 +112,204 @@ const isShortScreen = responsiveHeight < 650;
       return;
     }
 
+    // Start the WebRTC camera.
+    const stream = await startCameraStream();
+    streamRef.current = stream;
+
+    // Create the WebRTC peer connection.
+    const peerConnection = createPeerConnection(stream);
+    peerConnectionRef.current = peerConnection;
+
+    // Display the camera preview.
+    setWebrtcStream(stream);
     setSessionActive(true);
-  }
 
-  function stopSession() {
+    console.log('EyeSight WebRTC camera started');
+
+  } catch (error) {
+    closeWebRTCConnection(
+      peerConnectionRef.current,
+      streamRef.current
+    );
+
+    peerConnectionRef.current = null;
+    streamRef.current = null;
+
+    setWebrtcStream(null);
     setSessionActive(false);
-    Alert.alert('EyeSight', 'Session stopped!');
-  }
 
-  function askQuestion() {
     Alert.alert(
-      'EyeSight',
-      'Microphone and AI will be connected in the next steps.'
+      'WebRTC Error',
+      error instanceof Error
+        ? error.message
+        : 'Unable to start WebRTC camera.'
     );
   }
+}
+function stopSession() {
+  // Close WebRTC and release the camera.
+  closeWebRTCConnection(
+    peerConnectionRef.current,
+    streamRef.current
+  );
 
+  // Clear the stored resources.
+  peerConnectionRef.current = null;
+  streamRef.current = null;
+
+  setWebrtcStream(null);
+  setSessionActive(false);
+
+  Alert.alert('EyeSight', 'Session stopped!');
+}
+
+
+async function speakAnswer(
+  text: string,
+  language: string = 'en'
+) {
+  try {
+    // Stop any previous speech
+    Speech.stop();
+
+    // Speak the AI answer
+    Speech.speak(text, {
+      language,
+      rate: 0.9,
+      pitch: 1.0,
+      onError: (error) => {
+        console.error('Text-to-Speech Error:', error);
+      },
+    });
+  } catch (error) {
+    console.error('Speech Error:', error);
+  }
+}
+
+
+  async function askQuestion() {
+  try {
+    // Stop recording if the user is already recording
+    if (recorderState.isRecording) {
+      await audioRecorder.stop();
+
+
+const uri = audioRecorder.uri;
+setRecordedAudioUri(uri);
+setRecordingFinished(!!uri);
+
+if (!uri) {
+  Alert.alert('EyeSight', 'No audio file was found.');
+  return;
+}
+
+// Send the recorded audio to Whisper
+const result = await transcribeRecording(uri);
+
+console.log('Whisper Transcript:', result.transcript);
+console.log('Detected Language:', result.language);
+console.log('Duration:', result.duration_seconds);
+
+
+Alert.alert(
+  'EyeSight - Whisper',
+  `Your question: ${result.transcript}`,
+  [
+    {
+      text: 'OK',
+    },
+    {
+      text: 'Test Voice',
+      onPress: async () => {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+
+        speakAnswer(
+          'Hello! I am EyeSight, your AI visual assistant.',
+          'en'
+        );
+      },
+    },
+  ]
+);
+
+
+return;
+
+    }
+
+    // Request microphone permission
+    const permission = await requestRecordingPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert(
+        'Microphone Permission',
+        'EyeSight needs microphone access to record your questions.'
+      );
+      return;
+    }
+
+    // Configure audio recording
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+    });
+
+    // Prepare and start recording
+    await audioRecorder.prepareToRecordAsync();
+    audioRecorder.record();
+
+    setRecordedAudioUri(null);
+    setRecordingFinished(false);
+
+  } catch (error) {
+  Alert.alert(
+    'Recording or Transcription Error',
+    error instanceof Error
+      ? error.message
+      : 'Something went wrong while recording or transcribing.'
+  );
+}
+}
+async function playRecording() {
+  if (!recordedAudioUri) {
+    Alert.alert('EyeSight', 'No recording available.');
+    return;
+  }
+
+  try {
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+    });
+
+    await audioPlayer.seekTo(0);
+    audioPlayer.play();
+
+  } catch (error) {
+    Alert.alert(
+      'Playback Error',
+      error instanceof Error
+        ? error.message
+        : 'Unable to play recording.'
+    );
+  }
+}
+
+async function handleQuestionButton() {
+  if (recorderState.isRecording) {
+    await askQuestion();
+
+  } else if (recordingFinished) {
+    await playRecording();
+    setRecordingFinished(false);
+
+  } else {
+    await askQuestion();
+  }
+}
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -102,22 +351,21 @@ const isShortScreen = responsiveHeight < 650;
               {sessionActive ? 'Active' : 'Inactive'}
             </Text>
           </View>
-
-          {sessionActive && (
-            <View
-              style={[
-                styles.cameraContainer,
-                isWideScreen && styles.wideCamera,
-              ]}
-            >
-              <CameraView
-                style={styles.camera}
-                facing="back"
-                active={sessionActive}
-              />
-            </View>
-          )}
-
+{sessionActive && webrtcStream && (
+  <View
+    style={[
+      styles.cameraContainer,
+      isWideScreen && styles.wideCamera,
+    ]}
+  >
+    <RTCView
+      style={styles.camera}
+      streamURL={webrtcStream.toURL()}
+      objectFit="cover"
+      mirror={false}
+    />
+  </View>
+)}
           <View
             style={[
               styles.buttonContainer,
@@ -157,27 +405,65 @@ const isShortScreen = responsiveHeight < 650;
               </Text>
             </TouchableOpacity>
 
+
+{/* Play Recorded Question */}
+
+
             <TouchableOpacity
-              style={[
-                styles.questionButton,
-                !sessionActive && styles.disabledButton,
-              ]}
-              onPress={askQuestion}
-              disabled={!sessionActive}
-              accessibilityRole="button"
-              accessibilityLabel="Ask EyeSight a question"
-              accessibilityState={{ disabled: !sessionActive }}
-            >
-              <Text style={styles.buttonText}>
-                Ask a Question
-              </Text>
-            </TouchableOpacity>
-          </View>
+  style={[
+    styles.questionButton,
+    recorderState.isRecording && styles.recordingButton,
+    recordingFinished &&
+      !recorderState.isRecording &&
+      styles.playButton,
+    !sessionActive && styles.disabledButton,
+  ]}
+  onPress={handleQuestionButton}
+  disabled={!sessionActive}
+  accessibilityRole="button"
+  accessibilityLabel={
+    recorderState.isRecording
+      ? 'Stop recording'
+      : recordingFinished
+        ? 'Play recorded question'
+        : 'Ask EyeSight a question'
+  }
+  accessibilityState={{ disabled: !sessionActive }}
+>
+  <Text style={styles.buttonText}>
+    {recorderState.isRecording
+      ? 'Stop Recording'
+      : recordingFinished
+        ? 'Play Recording'
+        : 'Ask a Question'}
+  </Text>
+</TouchableOpacity>
+{/* Logout Button */}
+<TouchableOpacity
+  style={[
+    styles.logoutButton,
+    (loggingOut || sessionActive) && styles.disabledButton,
+  ]}
+  onPress={handleLogout}
+  disabled={loggingOut || sessionActive}
+  accessibilityRole="button"
+  accessibilityLabel="Log out of EyeSight"
+  accessibilityState={{
+    disabled: loggingOut || sessionActive,
+    busy: loggingOut,
+  }}
+>
+  <Text style={styles.logoutButtonText}>
+    {loggingOut ? 'Logging out...' : 'Logout'}
+  </Text>
+</TouchableOpacity>
         </View>
+         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -273,11 +559,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  recordingButton: {
+  backgroundColor: '#B42318',
+},
+playButton: {
+  backgroundColor: '#475569',
+  paddingVertical: 18,
+  paddingHorizontal: 12,
+  minHeight: 60,
+  borderRadius: 14,
+  marginTop: 12,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
   disabledButton: {
     opacity: 0.4,
   },
-  buttonText: {
+   buttonText: {
     color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+
+  logoutButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#B42318',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    minHeight: 60,
+    borderRadius: 14,
+    marginTop: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  logoutButtonText: {
+    color: '#B42318',
     fontSize: 20,
     fontWeight: 'bold',
     textAlign: 'center',

@@ -18,9 +18,11 @@ export default function RootLayout() {
       <AnimatedSplashOverlay />
 
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="login" />
-      </Stack>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="login" />
+      <Stack.Screen name="signup" />
+   </Stack>
     </ThemeProvider>
   );
 }
