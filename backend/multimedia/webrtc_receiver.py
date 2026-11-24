@@ -138,13 +138,15 @@ class WebRTCReceiver:
                 if now - state.last_saved_at < FRAME_SAMPLE_INTERVAL_SECONDS:
                     continue
 
-                # Member 2's function validates, scores, de-duplicates and persists
-                # this JPEG. Accepted frames enter the existing pipeline as pending.
-                frame_id = save_camera_frame(
+                                # Run synchronous database, image-processing and file operations
+                # in a worker thread to keep the WebRTC event loop responsive.
+                frame_id = await asyncio.to_thread(
+                    save_camera_frame,
                     state.session_id,
                     jpeg_bytes,
                     select_for_history=True,
                 )
+                
                 state.last_saved_at = now
                 if frame_id is not None:
                     state.last_frame_id = frame_id
