@@ -191,7 +191,7 @@ def create_capture_session(
 
 
 @router.post("/api/sessions/{session_id}/end")
-def end_capture_session(
+async def end_capture_session(
     session_id: int,
     user_id: int = Depends(_get_user_id),
     db: Session = Depends(get_db),
