@@ -81,8 +81,15 @@ def register_device(
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    if device is not None and device.user_id not in (None, user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="This device installation belongs to another user",
+        )
+
     if device is None:
         device = Device(
+            user_id=user_id,
             installation_id=str(data.installation_id),
             device_name=data.device_name,
             platform=data.platform,
@@ -91,6 +98,9 @@ def register_device(
         )
         db.add(device)
     else:
+        # Claim legacy unowned installations once; never transfer an owned device.
+        if device.user_id is None:
+            device.user_id = user_id
         device.device_name = data.device_name
         device.platform = data.platform
         device.app_version = data.app_version
@@ -122,7 +132,7 @@ def create_capture_session(
     device = db.query(Device).filter(
         Device.device_id == data.device_id
     ).first()
-    if device is None:
+    if device is None or device.user_id != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
 
     if FRAME_RETENTION_SECONDS <= 0:
