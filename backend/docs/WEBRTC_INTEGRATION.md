@@ -10,7 +10,7 @@ This document defines the backend contract for Member 1's mobile live-camera cli
 - Dashboard: authenticated preview WebSocket receiving JPEG binary frames.
 - Session identity: every stream is bound to the authenticated user's active `sessions.session_id`.
 
-The WebRTC implementation does not create capture sessions. It requires an existing active session owned by the signed-in user.
+The backend now exposes authenticated device registration and capture-session lifecycle endpoints. The session starts in `starting` state and becomes `active` only after the WebRTC peer reaches `connected`. The mobile app must call these endpoints before opening the signaling socket.
 
 ## Install and configure
 
@@ -33,9 +33,58 @@ Set these backend environment variables:
 | `WEBRTC_MAX_FRAME_WIDTH` | `1280` | Maximum preview/storage width |
 | `WEBRTC_JPEG_QUALITY` | `85` | JPEG encoding quality |
 | `WEBRTC_MAX_SIGNAL_MESSAGE_BYTES` | `65536` | Maximum signaling message size |
-| `WEBRTC_OFFER_TIMEOUT_SECONDS` | `20` | Timeout for the first SDP offer |
+| `WEBRTC_OFFER_TIMEOUT_SECONDS` | `20` | Timeout for the first SDP offer |\n| `SESSION_FRAME_RETENTION_SECONDS` | `86400` | Session frame-history retention in seconds |
 
 STUN assists network discovery but does not relay media. TURN is needed on networks where direct ICE connectivity is blocked. Store TURN credentials in backend deployment secrets, not mobile source code.
+
+## Device and capture-session REST contract
+
+All three endpoints below require the access token returned by `POST /auth/login`:
+
+```http
+Authorization: Bearer ACCESS_TOKEN
+```
+
+1. Register the installation:
+
+```http
+POST /api/devices/register
+Content-Type: application/json
+
+{
+  "installation_id": "UUID_FROM_SECURE_STORE",
+  "platform": "android",
+  "device_name": "EyeSight phone",
+  "app_version": "1.0.0"
+}
+```
+
+The response contains `device_id`. A device installation is associated with one user; a different account cannot claim it.
+
+2. Create a capture session only after the user has explicitly consented:
+
+```http
+POST /api/sessions
+Content-Type: application/json
+
+{
+  "device_id": 1,
+  "language_code": "en",
+  "consent": true,
+  "consent_version": "1.0"
+}
+```
+
+The response contains `session_id`. Its initial status is `starting`; the backend changes it to `active` when the WebRTC connection is established. The default frame-history retention is 86400 seconds and can be configured with `SESSION_FRAME_RETENTION_SECONDS`.
+
+3. After sending the WebRTC `stop` message and closing the signaling socket, end the session:
+
+```http
+POST /api/sessions/SESSION_ID/end
+Authorization: Bearer ACCESS_TOKEN
+```
+
+Ending a session also closes the backend peer connection. Session creation rejects missing consent and devices owned by another user.
 
 ## Mobile signaling contract
 
@@ -87,7 +136,7 @@ The backend replies with `{"type":"heartbeat-ack"}`.
 {"type":"stop"}
 ```
 
-Closing the WebSocket also closes the peer connection.
+Closing the WebSocket also closes the peer connection. The mobile client should additionally call `POST /api/sessions/SESSION_ID/end` so the database session is marked ended and the backend media resources are released.
 
 ## Server signaling responses
 
