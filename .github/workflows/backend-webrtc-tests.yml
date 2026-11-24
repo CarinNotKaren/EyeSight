@@ -1,6 +1,7 @@
 name: Backend WebRTC Tests
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feature/member3-webrtc-backend
