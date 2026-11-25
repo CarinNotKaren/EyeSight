@@ -50,6 +50,7 @@ def list_dashboard_sessions(
         Device, Device.device_id == CaptureSession.device_id
     ).filter(
         CaptureSession.user_id == user_id,
+        CaptureSession.history_expires_at > _now(),
     ).order_by(
         CaptureSession.started_at.desc()
     ).offset(offset).limit(limit).all()
@@ -110,11 +111,11 @@ def list_dashboard_frames(
     offset: int = Query(default=0, ge=0),
 ):
     """List unexpired frame metadata and analysis for one owned session."""
-    capture = _owned_session(db, session_id, user_id)
+    # Ownership and session expiry were already checked by this helper.
+    _owned_session(db, session_id, user_id)
     frames = db.query(Frame).filter(
         Frame.session_id == session_id,
         Frame.expires_at > _now(),
-        CaptureSession.history_expires_at > _now(),
     ).order_by(
         Frame.captured_at.desc()
     ).offset(offset).limit(limit).all()
