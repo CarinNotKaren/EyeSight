@@ -149,7 +149,12 @@ function Dashboard({ onLogout }) {
     ])
     setProfile(me)
     setSessions(list)
-    setSelectedId(current => current || list[0]?.session_id || null)
+    // Keep the selection only while it remains in the unexpired session list.
+    setSelectedId(current => (
+      list.some(session => session.session_id === current)
+        ? current
+        : list[0]?.session_id || null
+    ))
   }, [])
 
   const loadSessionData = useCallback(async (sessionId) => {
@@ -220,9 +225,10 @@ function Dashboard({ onLogout }) {
     const socketUrl = API_BASE.replace(/^http/, 'ws')
     const socket = new WebSocket(`${socketUrl}/ws/webrtc/${selectedId}/watch?token=${encodeURIComponent(token || '')}`)
     socket.binaryType = 'blob'
-    socket.onopen = () => setConnection('connected')
+    socket.onopen = () => setConnection('connecting')
     socket.onmessage = event => {
       if (event.data instanceof Blob) {
+        setConnection('connected')
         const url = URL.createObjectURL(event.data)
         setPreview(previous => {
           if (previous) URL.revokeObjectURL(previous)
@@ -360,7 +366,7 @@ function QuestionStrip({ questions, onViewAll }) {
 }
 
 function QuestionCard({ question }) {
-  return <article className="question-card"><div className="question-dot">Q</div><div className="question-content"><div className="question-meta"><strong>{question.input_type === 'voice' ? 'Voice question' : 'Text question'}</strong><small>{formatDate(question.received_at)}</small><StatusPill value={question.status} /></div><p className="question-text">{question.question_text || 'Waiting for voice transcription…'}</p>{question.answer && <div className="answer-block"><b>EyeSight answer</b><p>{question.answer.answer_text}</p><small>{question.answer.answer_type.replaceAll('_', ' ')} · {question.evidence?.length || 0} supporting frames</small></div>}</div></article>
+  return <article className="question-card"><div className="question-dot">Q</div><div className="question-content"><div className="question-meta"><strong>{question.input_type === 'voice' ? 'Voice question' : 'Text question'}</strong><small>{formatDate(question.received_at)}</small><StatusPill value={question.status} /></div><p className="question-text">{question.question_text || 'Waiting for voice transcription…'}</p>{question.answer && <div className="answer-block"><b>EyeSight answer</b><p>{question.answer.answer_text}</p><small>{question.answer.answer_type.replaceAll('_', ' ')} · {question.evidence?.length || 0} supporting frames</small>{question.evidence?.length > 0 && <p className="evidence-reference">Evidence: {question.evidence.map(item => `Frame #${item.frame_id} · ${item.retrieval_method}`).join(' | ')}</p>}</div>}</div></article>
 }
 
 function App() {
