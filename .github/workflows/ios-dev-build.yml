@@ -1,0 +1,94 @@
+name: EyeSight iOS Development Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - maria-integration
+    paths:
+      - '.github/workflows/ios-dev-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-development:
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: mobile
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install locked mobile dependencies
+        run: npm ci
+
+      - name: Generate native iOS project
+        run: npx --no-install expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods dependencies
+        working-directory: mobile/ios
+        run: pod install
+
+      - name: Build unsigned iPhone development app
+        run: |
+          xcodebuild -version
+          workspace=$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)
+          if [[ -z "$workspace" ]]; then
+            echo 'Xcode workspace not found' >&2
+            exit 1
+          fi
+          scheme=$(basename "$workspace" .xcworkspace)
+
+          # Keep the main code in the executable for third-party signing.
+          xcodebuild archive \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/EyeSight-dev.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            ENABLE_DEBUG_DYLIB=NO
+
+      - name: Verify development launcher and package unsigned IPA
+        run: |
+          app_path=$(find build/EyeSight-dev.xcarchive/Products/Applications -maxdepth 1 -name '*.app' -print -quit)
+          if [[ -z "$app_path" ]]; then
+            echo 'Archived iOS app not found' >&2
+            exit 1
+          fi
+
+          plist="$app_path/Info.plist"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
+          xcrun lipo "$app_path/$executable" -verify_arch arm64
+          if ! strings -a "$app_path/$executable" | grep -F 'EXDevLauncherController' >/dev/null; then
+            echo '::warning::Expo development launcher marker not found; verify the launcher on the iPhone.'
+          fi
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSBonjourServices' "$plist" | grep -F '_expo._tcp'
+
+          mkdir -p build/dev-ipa/Payload
+          cp -R "$app_path" build/dev-ipa/Payload/
+          cd build/dev-ipa
+          zip -qry EyeSight-dev-unsigned.ipa Payload
+
+      - name: Upload development IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: EyeSight-iOS-dev-unsigned
+          path: mobile/build/dev-ipa/EyeSight-dev-unsigned.ipa
+          if-no-files-found: error

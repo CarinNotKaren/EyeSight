@@ -1,3 +1,4 @@
+import { connectWebRTCSignaling } from '../../services/signaling';
 import { useRouter } from 'expo-router';
 import { logout } from '../../services/auth';
 import { useEffect, useRef, useState } from 'react';
@@ -23,7 +24,11 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-
+import {
+  registerDevice,
+  createCaptureSession,
+  endCaptureSession,
+} from "../../services/session";
 import {
   MediaStream,
   RTCPeerConnection,
@@ -44,7 +49,7 @@ export default function HomeScreen() {
   const [loggingOut, setLoggingOut] = useState(false);
 
   async function handleLogout() {
-    if (loggingOut || sessionActive) return;
+    if (loggingOut || sessionActive || sessionLoading) return;
 
     setLoggingOut(true);
 
@@ -61,11 +66,14 @@ export default function HomeScreen() {
     }
   }
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
 
 const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null);
 
 const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
 const streamRef = useRef<MediaStream | null>(null);
+const backendSessionIdRef = useRef<number | null>(null);
+const signalingSocketRef = useRef<WebSocket | null>(null);
 
   const [permission, requestPermission] = useCameraPermissions();
   // Microphone recording
@@ -90,14 +98,45 @@ const responsiveHeight = screenReady ? height : 800;
 const isWideScreen = responsiveWidth >= 900;
 const isTablet = responsiveWidth >= 600 && responsiveWidth < 900;
 const isShortScreen = responsiveHeight < 650;
+const requestStreamingConsent = (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    Alert.alert(
+      "Start EyeSight Session",
+      "EyeSight will access your camera and send video to the backend for AI processing. Do you agree?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+          onPress: () => resolve(false),
+        },
+        {
+          text: "Agree",
+          onPress: () => resolve(true),
+        },
+      ],
+      {
+        cancelable: false,
+      }
+    );
+  });
+};
+
+
 async function startSession() {
+  if (sessionLoading || sessionActive) return;
+
+  setSessionLoading(true);
+
   try {
-    const installationId = await getInstallationId();
-    const platform = getDevicePlatform();
+    // 1. Ask for consent
+    console.log('CONSENT FUNCTION CALLED');
+    const consent = await requestStreamingConsent();
 
-    console.log('EyeSight Installation ID:', installationId);
-    console.log('Device Platform:', platform);
+    if (!consent) {
+      return;
+    }
 
+    // 2. Check camera permission
     let cameraPermission = permission;
 
     if (!cameraPermission?.granted) {
@@ -112,21 +151,53 @@ async function startSession() {
       return;
     }
 
-    // Start the WebRTC camera.
+    // 3. Get device information
+    const installationId = await getInstallationId();
+    const platform = getDevicePlatform();
+
+    console.log('EyeSight Installation ID:', installationId);
+    console.log('Device Platform:', platform);
+
+    // 4. Register the device in the backend
+    const deviceId = await registerDevice();
+    console.log('Registered Device ID:', deviceId);
+
+    // 5. Create the backend session
+    const sessionId = await createCaptureSession(deviceId);
+
+backendSessionIdRef.current = sessionId;
+
+console.log('Backend Session ID:', sessionId);
+
+    // 6. Start the camera
     const stream = await startCameraStream();
     streamRef.current = stream;
 
-    // Create the WebRTC peer connection.
+    // 7. Create the WebRTC peer connection
     const peerConnection = createPeerConnection(stream);
     peerConnectionRef.current = peerConnection;
+    // Connect the iPhone camera to the FastAPI WebRTC backend
+const signalingSocket = await connectWebRTCSignaling(
+  sessionId,
+  peerConnection
+);
 
-    // Display the camera preview.
+signalingSocketRef.current = signalingSocket;
+
+console.log('WebRTC signaling completed');
+    // 8. Display the camera preview
     setWebrtcStream(stream);
     setSessionActive(true);
 
-    console.log('EyeSight WebRTC camera started');
+    console.log('EyeSight camera started');
+    } catch (error) {
 
-  } catch (error) {
+    const failedSessionId = backendSessionIdRef.current;
+    backendSessionIdRef.current = null;
+
+    // Release the camera and peer before waiting for the backend request.
+    signalingSocketRef.current?.close();
+    signalingSocketRef.current = null;
     closeWebRTCConnection(
       peerConnectionRef.current,
       streamRef.current
@@ -138,27 +209,64 @@ async function startSession() {
     setWebrtcStream(null);
     setSessionActive(false);
 
+    if (failedSessionId !== null) {
+      try {
+        await endCaptureSession(failedSessionId);
+      } catch (cleanupError) {
+        console.error('Failed to end backend session:', cleanupError);
+      }
+    }
+
     Alert.alert(
-      'WebRTC Error',
+      'Session Error',
       error instanceof Error
         ? error.message
-        : 'Unable to start WebRTC camera.'
+        : 'Unable to start EyeSight session.'
     );
+     } finally {
+    setSessionLoading(false);
   }
 }
-function stopSession() {
-  // Close WebRTC and release the camera.
+
+
+async function stopSession() {
+  // Close signaling when the user stops the session
+signalingSocketRef.current?.close();
+signalingSocketRef.current = null;
+  // Get the current backend session ID
+  const sessionId = backendSessionIdRef.current;
+  backendSessionIdRef.current = null;
+
+  // Stop the camera and close the local WebRTC connection
   closeWebRTCConnection(
     peerConnectionRef.current,
     streamRef.current
   );
 
-  // Clear the stored resources.
   peerConnectionRef.current = null;
   streamRef.current = null;
 
   setWebrtcStream(null);
   setSessionActive(false);
+
+  // Stop any ongoing text-to-speech
+  Speech.stop();
+
+  // End the session in the backend
+  if (sessionId !== null) {
+    try {
+      await endCaptureSession(sessionId);
+      console.log('Backend session ended:', sessionId);
+    } catch (error) {
+      console.error('Failed to end backend session:', error);
+
+      Alert.alert(
+        'Session Warning',
+        'The camera stopped, but the backend session could not be ended.'
+      );
+      return;
+    }
+  }
 
   Alert.alert('EyeSight', 'Session stopped!');
 }
@@ -375,16 +483,19 @@ async function handleQuestionButton() {
             <TouchableOpacity
               style={[
                 styles.button,
-                sessionActive && styles.disabledButton,
+                (sessionActive || sessionLoading) && styles.disabledButton,
               ]}
               onPress={startSession}
-              disabled={sessionActive}
+              disabled={sessionActive || sessionLoading}
               accessibilityRole="button"
               accessibilityLabel="Start EyeSight session"
-              accessibilityState={{ disabled: sessionActive }}
+              accessibilityState={{
+  disabled: sessionActive || sessionLoading,
+  busy: sessionLoading,
+}}
             >
               <Text style={styles.buttonText}>
-                Start Session
+                {sessionLoading ? 'Connecting...' : 'Start Session'}
               </Text>
             </TouchableOpacity>
 
@@ -442,14 +553,14 @@ async function handleQuestionButton() {
 <TouchableOpacity
   style={[
     styles.logoutButton,
-    (loggingOut || sessionActive) && styles.disabledButton,
+    (loggingOut || sessionActive || sessionLoading) && styles.disabledButton,
   ]}
   onPress={handleLogout}
-  disabled={loggingOut || sessionActive}
+  disabled={loggingOut || sessionActive || sessionLoading}
   accessibilityRole="button"
   accessibilityLabel="Log out of EyeSight"
   accessibilityState={{
-    disabled: loggingOut || sessionActive,
+   disabled: loggingOut || sessionActive || sessionLoading,
     busy: loggingOut,
   }}
 >

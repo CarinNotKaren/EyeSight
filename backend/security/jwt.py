@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+SECRET_KEY: str = os.getenv("JWT_SECRET_KEY") or ""
 
 if not SECRET_KEY:
     raise RuntimeError("JWT_SECRET_KEY is missing from .env")
