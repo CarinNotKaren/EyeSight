@@ -50,7 +50,6 @@ def list_dashboard_sessions(
         Device, Device.device_id == CaptureSession.device_id
     ).filter(
         CaptureSession.user_id == user_id,
-        CaptureSession.history_expires_at > _now(),
     ).order_by(
         CaptureSession.started_at.desc()
     ).offset(offset).limit(limit).all()
