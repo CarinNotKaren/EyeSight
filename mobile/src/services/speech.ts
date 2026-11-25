@@ -9,7 +9,8 @@ export type SpeechTranscriptionResponse = {
 };
 
 export async function transcribeRecording(
-  audioUri: string
+  audioUri: string,
+  signal?: AbortSignal,
 ): Promise<SpeechTranscriptionResponse> {
   const formData = new FormData();
 
@@ -23,6 +24,7 @@ export async function transcribeRecording(
     {
       method: 'POST',
       body: formData,
+      signal,
     }
   );
 

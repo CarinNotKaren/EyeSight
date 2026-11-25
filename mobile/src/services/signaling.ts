@@ -26,21 +26,40 @@ export async function connectWebRTCSignaling(
         `${wsBaseUrl}/ws/webrtc/${sessionId}` +
         `?token=${encodeURIComponent(token)}`;
 
-    // Create the offer before opening the socket.
-    const offer = await createWebRTCOffer(peerConnection);
+    let socket: WebSocket;
+    let offerSent = false;
+    const pendingCandidates: string[] = [];
+
+    // Setting the local description can emit candidates before the socket opens.
+    const stopObserving = observeLocalIceCandidates(peerConnection, (candidate) => {
+        const message = JSON.stringify({ type: 'ice-candidate', ...candidate });
+
+        if (!offerSent) {
+            pendingCandidates.push(message);
+        } else if (socket.readyState === WebSocket.OPEN) {
+            socket.send(message);
+        }
+    });
+
+    let offerSdp: string;
+    try {
+        const offer = await createWebRTCOffer(peerConnection);
+        offerSdp = offer.sdp;
+        socket = new WebSocket(websocketUrl);
+    } catch (error) {
+        stopObserving();
+        throw error;
+    }
 
     return new Promise<WebSocket>((resolve, reject) => {
-        const socket = new WebSocket(websocketUrl);
-        let offerSent = false;
         let settled = false;
-
-        const pendingCandidates: object[] = [];
 
         const fail = (message: string) => {
             if (settled) return;
 
             settled = true;
             clearTimeout(connectionTimeout);
+            stopObserving();
             socket.close();
 
             reject(new Error(message));
@@ -50,34 +69,21 @@ export async function connectWebRTCSignaling(
         const connectionTimeout = setTimeout(() => {
             fail('WebRTC connection timed out after 25 seconds');
         }, 25000);
-        observeLocalIceCandidates(peerConnection, (candidate) => {
-            const message = {
-                type: 'ice-candidate',
-                candidate,
-            };
-
-            if (socket.readyState === WebSocket.OPEN && offerSent) {
-                socket.send(JSON.stringify(message));
-            } else {
-                pendingCandidates.push(message);
-            }
-        });
 
         socket.onopen = () => {
             console.log('EyeSight signaling WebSocket connected');
 
             socket.send(JSON.stringify({
                 type: 'offer',
-                sdp: peerConnection.localDescription?.sdp ?? offer.sdp,
+                sdp: peerConnection.localDescription?.sdp ?? offerSdp,
             }));
 
-            offerSent = true;
-
             for (const message of pendingCandidates) {
-                socket.send(JSON.stringify(message));
+                socket.send(message);
             }
 
             pendingCandidates.length = 0;
+            offerSent = true;
         };
 
         socket.onmessage = async (event) => {
@@ -119,6 +125,7 @@ export async function connectWebRTCSignaling(
         };
 
         socket.onclose = () => {
+            stopObserving();
             console.log('EyeSight signaling WebSocket closed');
 
             if (!settled) {

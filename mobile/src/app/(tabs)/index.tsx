@@ -1,6 +1,6 @@
 import { connectWebRTCSignaling } from '../../services/signaling';
 import { useRouter } from 'expo-router';
-import { logout } from '../../services/auth';
+import { API_BASE_URL, getAccessToken, logout } from '../../services/auth';
 import { useEffect, useRef, useState } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
@@ -13,6 +13,7 @@ import {
 } from 'expo-audio';
 import { getInstallationId, getDevicePlatform } from '../../services/device';
 import * as Speech from 'expo-speech';
+import { requestVoiceAnswer } from '../../services/questions';
 import { transcribeRecording } from '../../services/speech';
 import {
   Alert,
@@ -75,6 +76,63 @@ const streamRef = useRef<MediaStream | null>(null);
 const backendSessionIdRef = useRef<number | null>(null);
 const signalingSocketRef = useRef<WebSocket | null>(null);
 
+  // Temporary frame diagnostics for development builds.
+  useEffect(() => {
+    if (!__DEV__ || !sessionActive) return;
+
+    const sessionId = backendSessionIdRef.current;
+    if (sessionId === null) return;
+
+    const controller = new AbortController();
+    let inFlight = false;
+    const isCurrentSession = () =>
+      !controller.signal.aborted && backendSessionIdRef.current === sessionId;
+
+    function stopPolling() {
+      clearInterval(interval);
+      controller.abort();
+    }
+
+    async function pollFrameStatus() {
+      if (inFlight || !isCurrentSession()) return;
+      inFlight = true;
+
+      try {
+        const token = await getAccessToken();
+        if (!token || !isCurrentSession()) return;
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/webrtc/sessions/${sessionId}/status?token=${encodeURIComponent(token)}`,
+          { signal: controller.signal },
+        );
+
+        if (response.status === 409 || response.status === 410) {
+          stopPolling();
+          return;
+        }
+        if (!response.ok) return;
+
+        const { connection_state, received_frames, saved_frames } = await response.json();
+        if (
+          isCurrentSession() &&
+          typeof connection_state === 'string' &&
+          typeof received_frames === 'number' &&
+          typeof saved_frames === 'number'
+        ) {
+          console.log({ connection_state, received_frames, saved_frames });
+        }
+      } catch {
+        // Request errors can contain the authenticated URL.
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    const interval = setInterval(() => void pollFrameStatus(), 2000);
+    void pollFrameStatus();
+    return stopPolling;
+  }, [sessionActive]);
+
   const [permission, requestPermission] = useCameraPermissions();
   // Microphone recording
 const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -82,9 +140,17 @@ const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 const recorderState = useAudioRecorderState(audioRecorder);
 
 const [recordedAudioUri, setRecordedAudioUri] = useState<string | null>(null);
-const audioPlayer = useAudioPlayer(recordedAudioUri);
-const [recordingFinished, setRecordingFinished] = useState(false);
+  const [questionTranscript, setQuestionTranscript] = useState('');
+  const audioPlayer = useAudioPlayer(null, { keepAudioSessionActive: true });
+  const [questionBusy, setQuestionBusy] = useState(false);
+  const questionOperationRef = useRef<AbortController | null>(null);
+  const questionRecordingRef = useRef<{ stopping?: Promise<void> } | null>(null);
   const { width, height } = useWindowDimensions();
+
+  useEffect(() => () => {
+    questionOperationRef.current?.abort();
+    void Speech.stop().catch(() => undefined);
+  }, []);
 
 const [screenReady, setScreenReady] = useState(false);
 
@@ -236,6 +302,7 @@ signalingSocketRef.current = null;
   // Get the current backend session ID
   const sessionId = backendSessionIdRef.current;
   backendSessionIdRef.current = null;
+  questionOperationRef.current?.abort();
 
   // Stop the camera and close the local WebRTC connection
   closeWebRTCConnection(
@@ -249,8 +316,24 @@ signalingSocketRef.current = null;
   setWebrtcStream(null);
   setSessionActive(false);
 
-  // Stop any ongoing text-to-speech
-  Speech.stop();
+  setRecordedAudioUri(null);
+  setQuestionTranscript('');
+  try {
+    audioPlayer.pause();
+    audioPlayer.replace(null);
+  } catch {
+    console.warn('Could not clear recording playback.');
+  }
+  const speechStopped = Speech.stop().catch(() => {
+    console.warn('Could not stop speech playback.');
+  });
+
+  try {
+    await stopQuestionRecording();
+  } catch {
+    console.warn('Could not stop the question recording.');
+  }
+  await speechStopped;
 
   // End the session in the backend
   if (sessionId !== null) {
@@ -272,150 +355,160 @@ signalingSocketRef.current = null;
 }
 
 
+async function setQuestionAudioMode(signal: AbortSignal, allowsRecording = false) {
+  signal.throwIfAborted();
+  audioPlayer.pause();
+  await Speech.stop();
+  signal.throwIfAborted();
+  await setAudioModeAsync({ allowsRecording, playsInSilentMode: true });
+  signal.throwIfAborted();
+}
+
 async function speakAnswer(
   text: string,
-  language: string = 'en'
+  language: string,
+  signal: AbortSignal,
+  onStart?: () => void,
 ) {
-  try {
-    // Stop any previous speech
-    Speech.stop();
-
-    // Speak the AI answer
-    Speech.speak(text, {
-      language,
-      rate: 0.9,
-      pitch: 1.0,
-      onError: (error) => {
-        console.error('Text-to-Speech Error:', error);
-      },
-    });
-  } catch (error) {
-    console.error('Speech Error:', error);
-  }
+  await setQuestionAudioMode(signal);
+  signal.throwIfAborted();
+  Speech.speak(text, {
+    language,
+    rate: 0.9,
+    pitch: 1.0,
+    onStart,
+    onError: () => console.warn('Could not speak the answer.'),
+  });
 }
 
 
-  async function askQuestion() {
-  try {
-    // Stop recording if the user is already recording
-    if (recorderState.isRecording) {
-      await audioRecorder.stop();
+function stopQuestionRecording() {
+  const recording = questionRecordingRef.current;
+  if (!recording) return;
 
-
-const uri = audioRecorder.uri;
-setRecordedAudioUri(uri);
-setRecordingFinished(!!uri);
-
-if (!uri) {
-  Alert.alert('EyeSight', 'No audio file was found.');
-  return;
+  // Stop Recording and Stop Session can both reach the same native recorder.
+  recording.stopping ??= audioRecorder.stop().then(() => {
+    questionRecordingRef.current = null;
+  }).finally(() => {
+    recording.stopping = undefined;
+  });
+  return recording.stopping;
 }
 
-// Send the recorded audio to Whisper
-const result = await transcribeRecording(uri);
+async function startQuestionRecording(signal: AbortSignal) {
+  const permission = await requestRecordingPermissionsAsync();
+  signal.throwIfAborted();
 
-console.log('Whisper Transcript:', result.transcript);
-console.log('Detected Language:', result.language);
-console.log('Duration:', result.duration_seconds);
-
-
-Alert.alert(
-  'EyeSight - Whisper',
-  `Your question: ${result.transcript}`,
-  [
-    {
-      text: 'OK',
-    },
-    {
-      text: 'Test Voice',
-      onPress: async () => {
-        await setAudioModeAsync({
-          allowsRecording: false,
-          playsInSilentMode: true,
-        });
-
-        speakAnswer(
-          'Hello! I am EyeSight, your AI visual assistant.',
-          'en'
-        );
-      },
-    },
-  ]
-);
-
-
-return;
-
-    }
-
-    // Request microphone permission
-    const permission = await requestRecordingPermissionsAsync();
-
-    if (!permission.granted) {
-      Alert.alert(
-        'Microphone Permission',
-        'EyeSight needs microphone access to record your questions.'
-      );
-      return;
-    }
-
-    // Configure audio recording
-    await setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-    });
-
-    // Prepare and start recording
-    await audioRecorder.prepareToRecordAsync();
-    audioRecorder.record();
-
-    setRecordedAudioUri(null);
-    setRecordingFinished(false);
-
-  } catch (error) {
-  Alert.alert(
-    'Recording or Transcription Error',
-    error instanceof Error
-      ? error.message
-      : 'Something went wrong while recording or transcribing.'
-  );
-}
-}
-async function playRecording() {
-  if (!recordedAudioUri) {
-    Alert.alert('EyeSight', 'No recording available.');
+  if (!permission.granted) {
+    Alert.alert(
+      'Microphone Permission',
+      'EyeSight needs microphone access to record your questions.'
+    );
     return;
   }
 
-  try {
-    await setAudioModeAsync({
-      allowsRecording: false,
-      playsInSilentMode: true,
-    });
+  await setQuestionAudioMode(signal, true);
+  signal.throwIfAborted();
 
-    await audioPlayer.seekTo(0);
-    audioPlayer.play();
-
-  } catch (error) {
-    Alert.alert(
-      'Playback Error',
-      error instanceof Error
-        ? error.message
-        : 'Unable to play recording.'
-    );
+  await audioRecorder.prepareToRecordAsync();
+  if (signal.aborted) {
+    await audioRecorder.stop();
+    return;
   }
+  audioRecorder.record();
+  questionRecordingRef.current = {};
+
+  setRecordedAudioUri(null);
+  setQuestionTranscript('');
 }
 
-async function handleQuestionButton() {
-  if (recorderState.isRecording) {
-    await askQuestion();
+async function playRecording(signal: AbortSignal) {
+  if (!recordedAudioUri) {
+    throw new Error('No recording available.');
+  }
 
-  } else if (recordingFinished) {
-    await playRecording();
-    setRecordingFinished(false);
+  await setQuestionAudioMode(signal);
+  signal.throwIfAborted();
+  // Replacing the source starts each replay at the beginning of this recording.
+  audioPlayer.replace({ uri: recordedAudioUri });
 
-  } else {
-    await askQuestion();
+  const loadDeadline = Date.now() + 5000;
+  while (!audioPlayer.isLoaded && Date.now() < loadDeadline) {
+    signal.throwIfAborted();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  signal.throwIfAborted();
+  if (!audioPlayer.isLoaded) throw new Error('The recording did not load. Please try again.');
+  audioPlayer.play();
+}
+
+async function handleQuestionButton(action: 'record' | 'play') {
+  const sessionId = backendSessionIdRef.current;
+  if (
+    !sessionActive || sessionId === null || questionOperationRef.current ||
+    questionRecordingRef.current?.stopping
+  ) return;
+
+  const operation = new AbortController();
+  const { signal } = operation;
+  questionOperationRef.current = operation;
+  setQuestionBusy(true);
+
+  try {
+    if (action === 'play') {
+      if (!questionRecordingRef.current) await playRecording(signal);
+    } else if (questionRecordingRef.current) {
+      const stopStartedAt = __DEV__ ? performance.now() : 0;
+      await stopQuestionRecording();
+      signal.throwIfAborted();
+      if (__DEV__) {
+        console.log('[Voice timing]', { recording_stop_ms: Math.round(performance.now() - stopStartedAt) });
+      }
+
+      const uri = audioRecorder.uri;
+      if (!uri) throw new Error('No audio file was found.');
+      setRecordedAudioUri(uri);
+
+      const whisperStartedAt = __DEV__ ? performance.now() : 0;
+      const { transcript, language } = await transcribeRecording(uri, signal);
+      signal.throwIfAborted();
+      if (__DEV__) {
+        console.log('[Voice timing]', { whisper_ms: Math.round(performance.now() - whisperStartedAt) });
+      }
+      setQuestionTranscript(transcript.trim());
+
+      const questionStartedAt = __DEV__ ? performance.now() : 0;
+      const answer = await requestVoiceAnswer(sessionId, transcript, language, signal);
+      const speechStartedAt = __DEV__ ? performance.now() : 0;
+      if (__DEV__) {
+        console.log('[Voice timing]', {
+          question_api_ms: Math.round(speechStartedAt - questionStartedAt),
+          retrieval_ms: answer.timings?.retrieval_ms ?? null,
+          gemini_ms: answer.timings?.gemini_ms ?? null,
+        });
+      }
+
+      await speakAnswer(answer.answer_text, answer.language_code, signal, __DEV__ ? () => {
+        if (signal.aborted) return;
+        const playbackStartedAt = performance.now();
+        console.log('[Voice timing]', {
+          tts_start_ms: Math.round(playbackStartedAt - speechStartedAt),
+          total_ms: Math.round(playbackStartedAt - stopStartedAt),
+        });
+      } : undefined);
+    } else {
+      await startQuestionRecording(signal);
+    }
+  } catch (error) {
+    if (!signal.aborted) {
+      Alert.alert(
+        action === 'play' ? 'Playback Error' : 'Question Error',
+        error instanceof Error ? error.message : 'The audio action could not be completed.',
+      );
+    }
+  } finally {
+    questionOperationRef.current = null;
+    setQuestionBusy(false);
   }
 }
   return (
@@ -517,38 +610,36 @@ async function handleQuestionButton() {
             </TouchableOpacity>
 
 
-{/* Play Recorded Question */}
-
-
             <TouchableOpacity
   style={[
     styles.questionButton,
     recorderState.isRecording && styles.recordingButton,
-    recordingFinished &&
-      !recorderState.isRecording &&
-      styles.playButton,
-    !sessionActive && styles.disabledButton,
+    (!sessionActive || questionBusy) && styles.disabledButton,
   ]}
-  onPress={handleQuestionButton}
-  disabled={!sessionActive}
+  onPress={() => void handleQuestionButton('record')}
+  disabled={!sessionActive || questionBusy}
   accessibilityRole="button"
-  accessibilityLabel={
-    recorderState.isRecording
-      ? 'Stop recording'
-      : recordingFinished
-        ? 'Play recorded question'
-        : 'Ask EyeSight a question'
-  }
-  accessibilityState={{ disabled: !sessionActive }}
+  accessibilityLabel={recorderState.isRecording ? 'Stop recording' : 'Ask EyeSight a question'}
+  accessibilityState={{ disabled: !sessionActive || questionBusy, busy: questionBusy }}
 >
   <Text style={styles.buttonText}>
-    {recorderState.isRecording
-      ? 'Stop Recording'
-      : recordingFinished
-        ? 'Play Recording'
-        : 'Ask a Question'}
+    {recorderState.isRecording ? 'Stop Recording' : 'Ask a Question'}
   </Text>
 </TouchableOpacity>
+{sessionActive && recordedAudioUri && (
+  <TouchableOpacity
+    style={[styles.playButton, questionBusy && styles.disabledButton]}
+    onPress={() => void handleQuestionButton('play')}
+    disabled={questionBusy}
+    accessibilityRole="button"
+    accessibilityState={{ disabled: questionBusy }}
+  >
+    <Text style={styles.buttonText}>Play Recording</Text>
+  </TouchableOpacity>
+)}
+{sessionActive && questionTranscript !== '' && (
+  <Text style={styles.questionTranscript}>You said “{questionTranscript}”</Text>
+)}
 {/* Logout Button */}
 <TouchableOpacity
   style={[
@@ -683,6 +774,12 @@ playButton: {
   alignItems: 'center',
   justifyContent: 'center',
 },
+  questionTranscript: {
+    marginTop: 12,
+    color: '#25354D',
+    fontSize: 18,
+    lineHeight: 24,
+  },
   disabledButton: {
     opacity: 0.4,
   },
