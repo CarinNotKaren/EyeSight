@@ -27,3 +27,6 @@ google-genai
 
 # Member 3: local Whisper speech-to-text integration (Base/Small comparison).
 openai-whisper
+
+# Member 3: WebRTC signaling and server-side video reception.
+aiortc>=1.9,<2.0
