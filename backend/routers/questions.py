@@ -60,14 +60,20 @@ def _retrieve_and_answer(question, db):
         db.refresh(question)
 
     except Exception as error:
+        import logging
+        logging.exception(
+            "Visual retrieval failed for question %s",
+            question.question_id,
+        )
+
         _mark_question_failed(
             db, question.question_id, "visual_retrieval_failed"
         )
+
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Visual evidence retrieval failed",
         ) from error
-
     try:
         # The service persists the answer and the exact frame evidence.
         # Provider failures become a safe error_fallback answer in that service.

@@ -1,5 +1,5 @@
 """Server-side WebRTC receiver for live EyeSight camera streams."""
-
+import subprocess
 import asyncio
 import logging
 import os
@@ -214,22 +214,38 @@ class WebRTCReceiver:
         )
 
     async def _run_frame_pipeline(self, session_id: int) -> bool:
-        """Start Member 2's pending-frame worker as a separate Python process."""
+        """Start the pending-frame worker as a separate Python process."""
         backend_dir = Path(__file__).resolve().parents[1]
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "multimedia.webrtc_pipeline_worker",
-            "--session",
-            str(session_id),
+
+        # Launch the worker without using asyncio's unsupported Windows
+        # subprocess transport.
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "multimedia.webrtc_pipeline_worker",
+                "--session",
+                str(session_id),
+            ],
             cwd=str(backend_dir),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        return_code = await process.wait()
+
+        # Check periodically without blocking the FastAPI event loop.
+        while process.poll() is None:
+            await asyncio.sleep(0.1)
+
+        return_code = process.returncode
+
         if return_code != 0:
-            logger.error("Frame worker exited with code %s for session %s", return_code, session_id)
+            logger.error(
+                "Frame worker exited with code %s for session %s",
+                return_code,
+                session_id,
+            )
             return False
+
         return True
 
     async def _restart_if_pending(self, session_id: int, completed: asyncio.Task) -> None:

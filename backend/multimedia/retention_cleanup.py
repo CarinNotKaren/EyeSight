@@ -1,3 +1,4 @@
+
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +9,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from database.connection import SessionLocal
 from database.models import Frame
 from database.models import Session as CaptureSession
+from database.models.answer_evidence import AnswerEvidence
+from database.models.question import Question
 
 
 STORAGE_ROOT = (
@@ -126,6 +129,7 @@ def cleanup_expired_frames(session_id=None, limit=100):
         frame_ids = [frame.frame_id for frame, _ in rows]
 
     deleted_count = 0
+    preserved_count = 0
     failed_count = 0
     skipped_count = 0
 
@@ -155,7 +159,7 @@ def cleanup_expired_frames(session_id=None, limit=100):
                     if session is None:
                         raise ValueError("Frame session is missing.")
 
-                    # Recheck expiry immediately before deletion.
+                    # Recheck expiry immediately before cleanup.
                     now = utc_now()
 
                     if (
@@ -164,6 +168,40 @@ def cleanup_expired_frames(session_id=None, limit=100):
                     ):
                         skipped_count += 1
                         continue
+
+                    # Never clean up frames still being processed.
+                    if frame.processing_status in ("pending", "processing"):
+                        skipped_count += 1
+                        continue
+
+                    # Protect all frames in a session while a question
+                    # is waiting for or performing retrieval/answering.
+                    active_question = db.scalar(
+                        select(Question.question_id)
+                        .where(
+                            Question.session_id == frame.session_id,
+                            Question.status.in_(
+                                (
+                                    "received",
+                                    "transcribing",
+                                    "retrieving",
+                                    "answering",
+                                )
+                            ),
+                        )
+                        .limit(1)
+                    )
+
+                    if active_question is not None:
+                        skipped_count += 1
+                        continue
+
+                    # Check whether a saved answer references this frame.
+                    used_by_answer = db.scalar(
+                        select(AnswerEvidence.answer_id)
+                        .where(AnswerEvidence.frame_id == frame_id)
+                        .limit(1)
+                    )
 
                     # Validate all paths before deleting anything.
                     path = get_image_path(frame.image_storage_key)
@@ -175,6 +213,7 @@ def cleanup_expired_frames(session_id=None, limit=100):
                         preview.relative_to(STORAGE_ROOT).as_posix()
                         for preview in previews
                     ]
+
                     registered_preview = db.scalar(
                         select(Frame.frame_id)
                         .where(
@@ -195,19 +234,32 @@ def cleanup_expired_frames(session_id=None, limit=100):
 
                     path.unlink(missing_ok=True)
 
-                    # MySQL cascades deletion to linked frame results.
-                    # If commit fails, the frame row remains for retry.
-                    db.execute(
-                        delete(Frame).where(
-                            Frame.frame_id == frame_id
-                        )
-                    )
+                    if used_by_answer is not None:
+                        # Preserve the frame row and AnswerEvidence
+                        # relationship for saved answer history.
+                        preserved_count += 1
 
-            deleted_count += 1
-            print(
-                f"Deleted expired frame {frame_id}, "
-                "its known previews, and linked data."
-            )
+                    else:
+                        # No saved answer references this frame.
+                        # Delete its row and associated processing data.
+                        db.execute(
+                            delete(Frame).where(
+                                Frame.frame_id == frame_id
+                            )
+                        )
+
+            if used_by_answer is not None:
+                print(
+                    f"Expired frame {frame_id}: "
+                    "image and previews deleted; "
+                    "frame metadata and answer evidence preserved."
+                )
+            else:
+                deleted_count += 1
+                print(
+                    f"Deleted expired frame {frame_id}, "
+                    "its known previews, and linked processing data."
+                )
 
         except (
             OSError,
@@ -222,6 +274,7 @@ def cleanup_expired_frames(session_id=None, limit=100):
 
     print(
         f"Cleanup finished: deleted={deleted_count}, "
+        f"preserved={preserved_count}, "
         f"failed={failed_count}, skipped={skipped_count}"
     )
 

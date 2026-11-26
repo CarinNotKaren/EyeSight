@@ -1,6 +1,7 @@
 
 import * as SecureStore from "expo-secure-store";
-export const API_BASE_URL = "http://172.20.10.3:8000";
+// Connect the physical phone to the backend running on your computer.
+export const API_BASE_URL = "http://192.168.0.7:8000";
 
 
 

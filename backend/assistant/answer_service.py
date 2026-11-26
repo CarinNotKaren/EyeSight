@@ -20,7 +20,7 @@ from database.models.answer import Answer
 from database.models.answer_evidence import AnswerEvidence
 from database.models.frame import Frame
 from database.models.session import Session as CaptureSession
-
+from whisper.tokenizer import LANGUAGES
 
 # Gemini model confirmed to work with the configured API key.
 DEFAULT_VLM_MODEL = "gemini-3.5-flash-lite"
@@ -56,14 +56,9 @@ def utc_now():
 
 
 def _language_name(language_code):
-    """Map the project's supported language codes to prompt instructions."""
+    """Map Whisper language codes to their full language names."""
     language = (language_code or "en").lower().split("-")[0]
-
-    return {
-        "en": "English",
-        "fr": "French",
-        "ar": "Arabic",
-    }.get(language, "English")
+    return LANGUAGES.get(language, "english").title()
 
 
 def _fallback_text(language_code, no_evidence=False):
