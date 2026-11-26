@@ -1,0 +1,64 @@
+name: Dashboard Integration Checks
+
+on:
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/dashboard-checks.yml"
+  push:
+    branches:
+      - feature/dashboard-integration
+
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build dashboard
+        run: npm run build
+      - name: Lint dashboard
+        run: npm run lint
+
+  backend-dashboard-import:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: vision_assistant
+      DB_USER: test
+      DB_PASSWORD: test
+      JWT_SECRET_KEY: test-only-secret-key-for-ci
+      JWT_ALGORITHM: HS256
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dashboard API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install fastapi sqlalchemy pymysql python-dotenv PyJWT pydantic
+      - name: Compile backend modules
+        run: python -m compileall -q .
+      - name: Import dashboard router
+        run: python -c "from routers.dashboard import router; print('Dashboard router imported:', len(router.routes), 'routes')"
