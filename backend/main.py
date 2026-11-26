@@ -20,6 +20,7 @@ from routers.questions import router as questions_router
 from routers.speech import router as speech_router
 from routers.webrtc import router as webrtc_router
 from routers.sessions import router as sessions_router
+from routers.dashboard import router as dashboard_router
 from multimedia.webrtc_receiver import webrtc_receiver
 from contextlib import asynccontextmanager
 
@@ -59,6 +60,7 @@ app.include_router(questions_router)
 app.include_router(speech_router)
 app.include_router(webrtc_router)
 app.include_router(sessions_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/")
