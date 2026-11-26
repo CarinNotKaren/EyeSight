@@ -139,17 +139,18 @@ export function observeLocalIceCandidates(
     sdpMLineIndex: number | null;
   }) => void
 ) {
-peerConnection.onicecandidate = (event: any) => {
-    if (event.candidate) {
-      const candidate = event.candidate.toJSON();
+  const handleCandidate = ({ candidate }: { candidate: RTCIceCandidate | null }) => {
+    if (!candidate) return;
 
-      onCandidate({
-        candidate: candidate.candidate,
-        sdpMid: candidate.sdpMid ?? null,
-        sdpMLineIndex: candidate.sdpMLineIndex ?? null,
-      });
+    onCandidate({
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid ?? null,
+      sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+    });
 
-      console.log('Local ICE candidate generated');
-    }
+    console.log('Local ICE candidate generated');
   };
+
+  peerConnection.addEventListener('icecandidate', handleCandidate);
+  return () => peerConnection.removeEventListener('icecandidate', handleCandidate);
 }
