@@ -27,11 +27,38 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
+import asyncio
+import logging
+
+from multimedia.retention_cleanup import cleanup_expired_frames
+
+async def retention_cleanup_loop():
+    while True:
+        try:
+            cleanup_expired_frames(limit=100)
+        except Exception:
+            logging.exception("Automatic frame cleanup failed.")
+
+        await asyncio.sleep(60)
+
+
+
 # Close active peer connections during a graceful application shutdown.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    await webrtc_receiver.close_all()
+    cleanup_task = asyncio.create_task(retention_cleanup_loop())
+
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+        await webrtc_receiver.close_all()
 
 
 # Create the main FastAPI application.
@@ -46,8 +73,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174"
     ],
     allow_credentials=True,
     allow_methods=["*"],
